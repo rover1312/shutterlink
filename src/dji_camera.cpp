@@ -1,17 +1,19 @@
 // ============================================================================
-// dji_ble_client.cpp — NimBLE BLE Central for DJI Action 2 (Protocol Fixed)
+// dji_camera.cpp — NimBLE BLE Central for DJI Osmo Action (DUML protocol)
 // ============================================================================
-// Implements the exact DUML-over-BLE protocol verified by lib-osmo-ble and osmosis.
+// Implements the exact DUML-over-BLE protocol verified by lib-osmo-ble and
+// osmosis.  Field-tested: pairing + record start/stop.
 // ============================================================================
 
-#include "dji_ble_client.h"
+#include "dji_camera.h"
+#include "cam_registry.h"
 #include <NimBLEDevice.h>
 
 // ──────────────────────────────────────────────────────────────────────────────
 // DJI GATT UUIDs
 // ──────────────────────────────────────────────────────────────────────────────
 static NimBLEUUID DJI_SERVICE_UUID("0000fff0-0000-1000-8000-00805f9b34fb");
-static NimBLEUUID DJI_CHAR_FFF3("0000fff3-0000-1000-8000-00805f9b34fb"); // DO NOT WRITE DUML HERE
+static NimBLEUUID DJI_CHAR_FFF3("0000fff3-0000-1000-8000-00805f9b34fb");
 static NimBLEUUID DJI_CHAR_FFF4("0000fff4-0000-1000-8000-00805f9b34fb"); // Pairing Arm + Notifications
 static NimBLEUUID DJI_CHAR_FFF5("0000fff5-0000-1000-8000-00805f9b34fb"); // DUML Commands (WriteNoResponse)
 
@@ -19,7 +21,7 @@ static NimBLEUUID DJI_CHAR_FFF5("0000fff5-0000-1000-8000-00805f9b34fb"); // DUML
 // Internal state
 // ──────────────────────────────────────────────────────────────────────────────
 static BleConnectionState  _bleState         = BLE_DISCONNECTED;
-static CameraTelemetry     _telemetry        = {0, 0, CAM_STATE_UNKNOWN, false};
+static CameraTelemetry     _telemetry;
 
 static NimBLEClient             *_pClient    = nullptr;
 static NimBLERemoteCharacteristic *_pControlChar   = nullptr; // fff5
@@ -42,13 +44,13 @@ static uint32_t _pairingArmedTime     = 0;
 // ──────────────────────────────────────────────────────────────────────────────
 static void    startScan();
 static bool    connectToCamera();
-static void    notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData, 
+static void    notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
                               size_t length, bool isNotify);
 static bool    isDjiDevice(NimBLEAdvertisedDevice *device);
 static void    sendPairingArm();
 static void    sendSetPairingPIN();
 static void    sendKeepAlive();
-static size_t  buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver, 
+static size_t  buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver,
                                uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
                                const uint8_t *payload, size_t payloadLen);
 static uint8_t  crc8_dji(const uint8_t *data, size_t len);
@@ -59,10 +61,10 @@ static uint16_t crc16_dji(const uint8_t *data, size_t len);
 // ──────────────────────────────────────────────────────────────────────────────
 class ShutterLinkClientCallbacks : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient *pClient) override {
-        DBG("BLE: Connected to camera");
+        DBG("DJI: Connected to camera");
     }
     void onDisconnect(NimBLEClient *pClient) {
-        DBG("BLE: Disconnected from camera");
+        DBG("DJI: Disconnected from camera");
         _bleState = BLE_DISCONNECTED;
         _sessionEstablished = false;
         _pControlChar   = nullptr;
@@ -77,10 +79,21 @@ static ShutterLinkClientCallbacks _clientCallbacks;
 class ShutterLinkAdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice *advertisedDevice) override {
         if (isDjiDevice(advertisedDevice)) {
-            DBG("BLE: Found DJI camera: %s (%s) RSSI=%d",
-                advertisedDevice->getName().c_str(),
-                advertisedDevice->getAddress().toString().c_str(),
-                advertisedDevice->getRSSI());
+            std::string macStr = advertisedDevice->getAddress().toString();
+            std::string nameStr = advertisedDevice->getName();
+
+            // Learning is always allowed; CONNECTING is only permitted for
+            // the saved camera currently marked active (user-approved).
+            bool mayAuto = camRegistryMayAutoConnect(CAMERA_DJI, macStr.c_str());
+            camRegistryRemember(CAMERA_DJI, macStr.c_str(), nameStr.c_str());
+
+            DBG("DJI: seen %s (%s)%s", nameStr.c_str(), macStr.c_str(),
+                mayAuto ? "" : "  [not active — ignoring]");
+
+            if (!mayAuto) return;   // Keep scanning, never pair uninvited
+
+            DBG("DJI: Found active camera: %s (%s) RSSI=%d",
+                nameStr.c_str(), macStr.c_str(), advertisedDevice->getRSSI());
 
             NimBLEDevice::getScan()->stop();
             _targetAddress     = advertisedDevice->getAddress();
@@ -95,9 +108,8 @@ static ShutterLinkAdvertisedDeviceCallbacks _scanCallbacks;
 // Device identification
 // ──────────────────────────────────────────────────────────────────────────────
 static const char *DJI_NAME_PREFIXES[] = {
-    "rishavhsaction2", "Rishav", "rishav",
     "Osmo Action", "DJI Action", "OSMO ACTION", "DJI ACTION",
-    "Action 2", "action2",
+    "Action 2", "action2", "Action 4", "Action 5", "OsmoAction",
 };
 static const size_t DJI_NAME_PREFIX_COUNT = sizeof(DJI_NAME_PREFIXES) / sizeof(DJI_NAME_PREFIXES[0]);
 
@@ -118,9 +130,18 @@ static bool isDjiDevice(NimBLEAdvertisedDevice *device) {
 // ──────────────────────────────────────────────────────────────────────────────
 // Scan management
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// No-op completion handler — required so NimBLE uses the *non-blocking*
+/// scan API.  The two-argument start(duration, bool) overload BLOCKS the
+/// calling task until the scan finishes (forever when duration == 0),
+/// which would freeze the entire main loop.
+static void scanCompleteCb(NimBLEScanResults results) {
+    DBG("DJI: Scan window complete (%d devices)", results.getCount());
+}
+
 static void startScan() {
     if (_bleState == BLE_SCANNING) return;
-    DBG("BLE: Starting continuous scan for DJI camera...");
+    DBG("DJI: Starting continuous scan for camera...");
     _bleState     = BLE_SCANNING;
     _doConnect    = false;
 
@@ -130,7 +151,8 @@ static void startScan() {
     pScan->setInterval(100);
     pScan->setWindow(99);
     pScan->setMaxResults(0);
-    pScan->start(0, false); 
+    // Non-blocking overload (callback variant) — duration 0 = scan forever.
+    pScan->start(0, scanCompleteCb);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -138,7 +160,7 @@ static void startScan() {
 // ──────────────────────────────────────────────────────────────────────────────
 static bool connectToCamera() {
     if (!_hasTargetAddress) return false;
-    DBG("BLE: Connecting to target %s...", _targetAddress.toString().c_str());
+    DBG("DJI: Connecting to target %s...", _targetAddress.toString().c_str());
     _bleState = BLE_CONNECTING;
 
     if (!_pClient) {
@@ -148,15 +170,15 @@ static bool connectToCamera() {
     }
 
     if (!_pClient->connect(_targetAddress)) {
-        DBG("BLE: Connection failed!");
+        DBG("DJI: Connection failed!");
         _bleState = BLE_DISCONNECTED;
         return false;
     }
 
-    DBG("BLE: Connected! Discovering GATT services...");
+    DBG("DJI: Connected! Discovering GATT services...");
     NimBLERemoteService* pService = _pClient->getService(DJI_SERVICE_UUID);
     if (!pService) {
-        DBG("BLE: Service 0xFFF0 not found! Disconnecting.");
+        DBG("DJI: Service 0xFFF0 not found! Disconnecting.");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
         return false;
@@ -167,7 +189,7 @@ static bool connectToCamera() {
     _pControlChar   = pService->getCharacteristic(DJI_CHAR_FFF5);
 
     if (!_pControlChar || !_pAuthChar) {
-        DBG("BLE: Missing FFF4 or FFF5 characteristics!");
+        DBG("DJI: Missing FFF4 or FFF5 characteristics!");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
         return false;
@@ -176,12 +198,14 @@ static bool connectToCamera() {
     // Subscribe to notifications on FFF4 (pairing/telemetry) and FFF5
     if (_pAuthChar && _pAuthChar->canNotify()) {
         _pAuthChar->subscribe(true, notifyCallback);
-        DBG("BLE: Subscribed to FFF4 notifications");
+        DBG("DJI: Subscribed to FFF4 notifications");
     }
     if (_pControlChar && _pControlChar->canNotify()) {
         _pControlChar->subscribe(true, notifyCallback);
-        DBG("BLE: Subscribed to FFF5 notifications");
+        DBG("DJI: Subscribed to FFF5 notifications");
     }
+
+    strlcpy(_telemetry.model, "DJI Osmo Action", sizeof(_telemetry.model));
 
     // Start pairing sequence
     _bleState = BLE_AUTHENTICATING;
@@ -219,40 +243,40 @@ static uint16_t crc16_dji(const uint8_t *data, size_t len) {
     return crc;
 }
 
-static size_t buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver, 
+static size_t buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver,
                               uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
                               const uint8_t *payload, size_t payloadLen) {
     size_t idx = 0;
     uint16_t totalLen = 13 + payloadLen;
-    
+
     buffer[idx++] = 0x55;
     buffer[idx++] = totalLen & 0xFF;
     buffer[idx++] = 0x04 | ((totalLen >> 8) & 0x03); // ver=1
     buffer[idx++] = crc8_dji(buffer, 3);
-    
+
     // Target (LE)
     buffer[idx++] = sender;
     buffer[idx++] = receiver;
-    
+
     // Msg ID (BE)
     buffer[idx++] = (msgId >> 8) & 0xFF;
     buffer[idx++] = msgId & 0xFF;
-    
+
     // Type
     buffer[idx++] = flags;
     buffer[idx++] = cmdSet;
     buffer[idx++] = cmdId;
-    
+
     // Payload
     for (size_t i = 0; i < payloadLen; i++) {
         buffer[idx++] = payload[i];
     }
-    
+
     // CRC16 (LE)
     uint16_t crc = crc16_dji(buffer, idx);
     buffer[idx++] = crc & 0xFF;
     buffer[idx++] = (crc >> 8) & 0xFF;
-    
+
     return idx;
 }
 
@@ -261,36 +285,36 @@ static void sendPairingArm() {
     uint8_t armPairing[] = {0x01, 0x00};
     if (_pAuthChar && _pAuthChar->canWrite()) {
         _pAuthChar->writeValue(armPairing, 2, true); // Write with response
-        DBG("BLE: Wrote [0x01, 0x00] to FFF4 to arm pairing");
+        DBG("DJI: Wrote [0x01, 0x00] to FFF4 to arm pairing");
         _pairingArmedTime = millis();
     }
 }
 
 static void sendSetPairingPIN() {
     uint8_t packet[64];
-    
+
     // Payload: PackString("001749319286102") + PackString("osmo")
     uint8_t payload[32];
     size_t pIdx = 0;
-    
+
     const char* id = "001749319286102";
     payload[pIdx++] = strlen(id);
     memcpy(&payload[pIdx], id, strlen(id));
     pIdx += strlen(id);
-    
+
     const char* pin = "osmo";
     payload[pIdx++] = strlen(pin);
     memcpy(&payload[pIdx], pin, strlen(pin));
     pIdx += strlen(pin);
-    
+
     // Target: App (0x02) -> WiFi (0x07). Type: flags=0x40, set=0x07, id=0x45
-    size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++, 
+    size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++,
                                  0x40, 0x07, 0x45, payload, pIdx);
-    
+
     // MUST use Write-Without-Response (false) on FFF5
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
-        _pControlChar->writeValue(packet, len, false); 
-        DBG("BLE: Sent SetPairingPIN DUML packet to FFF5 (%d bytes)", len);
+        _pControlChar->writeValue(packet, len, false);
+        DBG("DJI: Sent SetPairingPIN DUML packet to FFF5 (%d bytes)", len);
     }
 }
 
@@ -298,7 +322,7 @@ static void sendKeepAlive() {
     // Send a generic ping to keep the link alive
     uint8_t packet[32];
     uint8_t payload[] = {0x00};
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++, 
+    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x00, 0xF1, payload, 1);
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
@@ -308,7 +332,7 @@ static void sendKeepAlive() {
 // ──────────────────────────────────────────────────────────────────────────────
 // Notification Callback
 // ──────────────────────────────────────────────────────────────────────────────
-static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData, 
+static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
                            size_t length, bool isNotify) {
     const char *charName = (pChar == _pAuthChar) ? "FFF4" : "FFF5";
 
@@ -318,50 +342,50 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
         for (size_t i = 0; i < length && i < 32; i++) {
             hexLen += snprintf(hexBuf + hexLen, sizeof(hexBuf) - hexLen, "%02X ", pData[i]);
         }
-        DBG("BLE: <<< NON-DUML [%s] (%d bytes): %s", charName, length, hexBuf);
+        DBG("DJI: <<< NON-DUML [%s] (%d bytes): %s", charName, length, hexBuf);
         return;
     }
-    
+
     uint8_t flags = pData[8];
     uint8_t cmdSet = pData[9];
     uint8_t cmdId = pData[10];
-    
-    DBG("BLE: <<< DUML [%s] flags=0x%02X set=0x%02X id=0x%02X len=%d", 
+
+    DBG("DJI: <<< DUML [%s] flags=0x%02X set=0x%02X id=0x%02X len=%d",
         charName, flags, cmdSet, cmdId, length);
-        
+
     // Check for Pairing Status Response (flags=0xC0, set=0x07, id=0x45)
     if (flags == 0xC0 && cmdSet == 0x07 && cmdId == 0x45) {
         if (length >= 12) {
-            DBG("BLE: Pairing Status Payload: %02X %02X %02X", pData[11], pData[12], pData[13]);
+            DBG("DJI: Pairing Status Payload: %02X %02X %02X", pData[11], pData[12], pData[13]);
             // payload[1] == 0x01 means Already Paired
-            if (pData[12] == 0x01 || pData[11] == 0x01) { 
+            if (pData[12] == 0x01 || pData[11] == 0x01) {
                 _sessionEstablished = true;
                 _bleState = BLE_CONNECTED;
-                DBG("BLE: *** ALREADY PAIRED - SESSION ESTABLISHED ***");
-            } 
+                DBG("DJI: *** ALREADY PAIRED - SESSION ESTABLISHED ***");
+            }
             // payload[1] == 0x02 means Approval Required
             else if (pData[12] == 0x02 || pData[11] == 0x02) {
-                DBG("BLE: Approval required - TAP APPROVE ON CAMERA SCREEN!");
+                DBG("DJI: Approval required - TAP APPROVE ON CAMERA SCREEN!");
             }
         }
     }
-    
+
     // Check for Pairing Approved (flags=0x40, set=0x07, id=0x46)
     if (flags == 0x40 && cmdSet == 0x07 && cmdId == 0x46) {
         _sessionEstablished = true;
         _bleState = BLE_CONNECTED;
-        DBG("BLE: *** PAIRING APPROVED - SESSION ESTABLISHED ***");
-        
+        DBG("DJI: *** PAIRING APPROVED - SESSION ESTABLISHED ***");
+
         // Send ACK back: flags=0xC0, set=0x07, id=0x46, payload=0x00
         uint8_t packet[16];
         uint8_t payload[] = {0x00};
-        size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++, 
+        size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++,
                                      0xC0, 0x07, 0x46, payload, 1);
         if (_pControlChar && _pControlChar->canWriteNoResponse()) {
             _pControlChar->writeValue(packet, len, false);
         }
     }
-    
+
     // Unsolicited Telemetry (flags=0x00)
     if (flags == 0x00) {
         _telemetry.dataValid = true;
@@ -372,16 +396,13 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
 // ──────────────────────────────────────────────────────────────────────────────
 // Public API
 // ──────────────────────────────────────────────────────────────────────────────
-void bleInit() {
-    DBG("BLE: Initialising NimBLE stack...");
-    NimBLEDevice::init("ESP32-ShutterLink");
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-    NimBLEDevice::setSecurityAuth(false, false, false);
+void djiInit() {
+    DBG("DJI: Backend ready (NimBLE stack shared)");
     _bleState = BLE_DISCONNECTED;
-    _telemetry = {0, 0, CAM_STATE_UNKNOWN, false};
+    _telemetry = CameraTelemetry();
 }
 
-void bleUpdate() {
+void djiUpdate() {
     uint32_t now = millis();
 
     switch (_bleState) {
@@ -405,8 +426,8 @@ void bleUpdate() {
                 _pairingArmedTime = 0; // Only send once
                 sendSetPairingPIN();
             }
-            if (now - _lastReconnectAttempt >= 30000) { 
-                DBG("BLE: Auth timeout (30s) — resetting");
+            if (now - _lastReconnectAttempt >= 30000) {
+                DBG("DJI: Auth timeout (30s) — resetting");
                 if (_pClient) _pClient->disconnect();
                 _bleState = BLE_DISCONNECTED;
                 _lastReconnectAttempt = now;
@@ -426,62 +447,52 @@ void bleUpdate() {
     }
 }
 
-bool bleSendStartRecord() {
+bool djiSendStartRecord() {
     if (_bleState != BLE_CONNECTED || !_sessionEstablished) return false;
-    
+
     uint8_t packet[32];
     uint8_t payload[] = {0x01}; // 1 = Start
-    
-    // Try CmdSet 0x0A (Camera), CmdId 0x0D (Record)
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++, 
+
+    // CmdSet 0x0A (Camera), CmdId 0x0D (Record)
+    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x0A, 0x0D, payload, sizeof(payload));
-    
+
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
-        DBG("BLE: Sent Start Record (0x0A/0x0D) to FFF5");
+        DBG("DJI: Sent Start Record (0x0A/0x0D) to FFF5");
         return true;
     }
     return false;
 }
 
-bool bleSendStopRecord() {
+bool djiSendStopRecord() {
     if (_bleState != BLE_CONNECTED || !_sessionEstablished) return false;
-    
+
     uint8_t packet[32];
     uint8_t payload[] = {0x00}; // 0 = Stop
-    
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++, 
+
+    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x0A, 0x0D, payload, sizeof(payload));
-    
+
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
-        DBG("BLE: Sent Stop Record (0x0A/0x0D) to FFF5");
+        DBG("DJI: Sent Stop Record (0x0A/0x0D) to FFF5");
         return true;
     }
     return false;
 }
 
-BleConnectionState bleGetState() { return _bleState; }
-const CameraTelemetry& bleGetTelemetry() { return _telemetry; }
-bool bleIsReady() { return (_bleState == BLE_CONNECTED) && _sessionEstablished; }
+BleConnectionState djiGetState() { return _bleState; }
+const CameraTelemetry& djiGetTelemetry() { return _telemetry; }
+bool djiIsReady() { return (_bleState == BLE_CONNECTED) && _sessionEstablished; }
 
-void bleFormatOSDString(char *outBuf, size_t bufLen) {
-    if (_bleState != BLE_CONNECTED || !_telemetry.dataValid) {
-        snprintf(outBuf, bufLen, (_bleState == BLE_SCANNING) ? "CAM: SCAN" : "CAM: OFF");
-        return;
-    }
-    uint16_t mins = _telemetry.recTimeSeconds / 60;
-    uint16_t secs = _telemetry.recTimeSeconds % 60;
-
-    switch (_telemetry.state) {
-        case CAM_STATE_RECORDING:
-            snprintf(outBuf, bufLen, "REC %d%% %02d:%02d", _telemetry.batteryPercent, mins, secs);
-            break;
-        case CAM_STATE_STANDBY:
-            snprintf(outBuf, bufLen, "STBY %d%% %02d:%02d", _telemetry.batteryPercent, mins, secs);
-            break;
-        default:
-            snprintf(outBuf, bufLen, "CAM: ???");
-            break;
-    }
-}  
+void djiTargetMac(const char *mac) {
+    if (!mac || !*mac) return;
+    NimBLEScan *pScan = NimBLEDevice::getScan();
+    if (pScan && pScan->isScanning()) pScan->stop();
+    if (_pClient && _pClient->isConnected()) _pClient->disconnect();
+    _targetAddress    = NimBLEAddress(mac);
+    _hasTargetAddress = true;
+    _doConnect        = true;
+    DBG("DJI: targeting %s (direct connect)", mac);
+}

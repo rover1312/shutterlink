@@ -4,6 +4,7 @@
 // References:
 //   MSP v1 spec : http://www.multiwii.com/wiki/index.php?title=Multiwii_Serial_Protocol
 //   MSP v2 spec : https://github.com/iNavFlight/inav/wiki/MSP-V2
+//   Betaflight  : src/main/msp/msp_protocol_v2_betaflight.h (MSP2_SET_TEXT)
 //
 // ─── MSP v1 Frame Layout ────────────────────────────────────────────────────
 //   Byte 0   : '$'          Preamble
@@ -92,12 +93,12 @@ bool mspParseByte(uint8_t byte, MspMessage &outMsg) {
             }
             break;
 
-        // ── Expecting 'M' (v1) ──────────────────────────────────────────
+        // ── Expecting 'M' (v1) or 'X' (v2 preamble) ─────────────────────
         case MSP_HEADER_M:
             if (byte == MSP_V1_HEADER_M) {
                 _parserState = MSP_V1_DIRECTION;
             } else {
-                // Not an MSP v1 frame — reset.
+                // We only parse v1 responses; skip anything else.
                 _parserState = MSP_IDLE;
             }
             break;
@@ -186,65 +187,58 @@ void mspSendRequest(uint8_t cmdId) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// MSP v2 — Send SET_TEXT for OSD
+// MSP v2 — Generic command sender
 // ──────────────────────────────────────────────────────────────────────────────
-// Payload for MSP2_COMMON_SET_TEXT:
-//   Byte 0        : Text Type (0 = PILOT_NAME, 1 = CRAFT_NAME, …)
-//   Byte 1        : Row
-//   Byte 2        : Column
-//   Byte 3        : String length (N)
-//   Bytes 4..3+N  : String data (ASCII, NOT null-terminated in the packet)
 
-void mspSendOSDText(uint8_t textType, uint8_t row, uint8_t col,
-                    const char *text) {
+void mspSendV2Command(uint16_t cmdId, const uint8_t *payload, uint16_t payloadLen) {
     if (!_fcSerial) return;
 
-    uint8_t textLen = (uint8_t)strlen(text);
-    if (textLen > OSD_MAX_TEXT_LEN) textLen = OSD_MAX_TEXT_LEN;
-
-    // Total payload = 4 header bytes + string bytes.
-    uint16_t payloadLen = 4 + textLen;
-
-    // ── Build the v2 frame ──────────────────────────────────────────────
-    // Header: $X< (3 bytes)
-    // Then:   flag(1) + cmd(2) + size(2) + payload(N) + crc8(1)
-    // Total:  3 + 1 + 2 + 2 + payloadLen + 1
-
-    // We'll build the CRC-able region first (flag…payload), then wrap it.
     // CRC region = flag(1) + cmd(2) + size(2) + payload(payloadLen)
-    uint16_t crcRegionLen = 1 + 2 + 2 + payloadLen;
-    uint8_t buf[3 + crcRegionLen + 1];  // VLA — safe for small sizes on ESP32
+    uint16_t crcRegionLen = 5 + payloadLen;
+    uint8_t buf[3 + MSP_MAX_PAYLOAD_SIZE + 6];
 
-    // Preamble
     buf[0] = MSP_V2_HEADER_DOLLAR;  // '$'
     buf[1] = MSP_V2_HEADER_X;       // 'X'
     buf[2] = MSP_V2_DIR_TO_FC;      // '<'
-
-    // Flag
-    buf[3] = 0x00;
+    buf[3] = 0x00;                  // Flags
 
     // Command ID (uint16 LE)
-    buf[4] = (uint8_t)(MSP2_COMMON_SET_TEXT & 0xFF);
-    buf[5] = (uint8_t)((MSP2_COMMON_SET_TEXT >> 8) & 0xFF);
+    buf[4] = (uint8_t)(cmdId & 0xFF);
+    buf[5] = (uint8_t)((cmdId >> 8) & 0xFF);
 
     // Payload size (uint16 LE)
     buf[6] = (uint8_t)(payloadLen & 0xFF);
     buf[7] = (uint8_t)((payloadLen >> 8) & 0xFF);
 
-    // Payload: text type, row, col, length, then string bytes
-    buf[8]  = textType;
-    buf[9]  = row;
-    buf[10] = col;
-    buf[11] = textLen;
-    memcpy(&buf[12], text, textLen);
+    if (payload && payloadLen) {
+        memcpy(&buf[8], payload, payloadLen);
+    }
 
-    // CRC-DVB-S2 over bytes 3..end-of-payload (flag through payload).
     uint8_t crc = crcDvbS2Buf(&buf[3], crcRegionLen);
     buf[3 + crcRegionLen] = crc;
 
-    // Send the complete frame.
     _fcSerial->write(buf, 3 + crcRegionLen + 1);
     _fcSerial->flush();
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// MSP v2 — SET_TEXT (0x3007): set pilot/craft/custom OSD text elements
+// ──────────────────────────────────────────────────────────────────────────────
+// Payload layout (verified against Betaflight master msp.c):
+//   Byte 0        : Text type (1=PILOT_NAME … 7..10=CUSTOM_MSG_0..3)
+//   Byte 1        : String length (N)
+//   Bytes 2..1+N  : String data (ASCII, NOT null-terminated in the packet)
+
+void mspSendSetText(uint8_t textType, const char *text) {
+    uint8_t textLen = (uint8_t)strlen(text);
+    if (textLen > OSD_MAX_TEXT_LEN) textLen = OSD_MAX_TEXT_LEN;
+
+    uint8_t payload[2 + OSD_MAX_TEXT_LEN];
+    payload[0] = textType;
+    payload[1] = textLen;
+    if (textLen) memcpy(&payload[2], text, textLen);
+
+    mspSendV2Command(MSP2_SET_TEXT, payload, 2 + textLen);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

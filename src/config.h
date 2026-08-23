@@ -1,7 +1,11 @@
 // ============================================================================
 // config.h — Project-wide configuration, pin definitions, and tunables
 // ============================================================================
-// ESP32-C3 ShutterLink: Betaflight ↔ DJI Action 2 bridge.
+// ESP32-C3 ShutterLink: Betaflight ↔ DJI Osmo / GoPro camera bridge.
+//
+// Runtime-changeable options (camera brand, switch channel, record-on-arm,
+// OSD slot contents, Wi-Fi credentials) live in settings.h / NVS and are
+// edited from the built-in Web UI.  Only low-level defaults belong here.
 // ============================================================================
 
 #ifndef CONFIG_H
@@ -24,21 +28,43 @@
 #define FC_UART_BAUD          115200
 
 // ──────────────────────────────────────────────────────────────────────────────
-// RC Channel / Switch Configuration
+// Default User Settings (editable at runtime via Web UI / stored in NVS)
 // ──────────────────────────────────────────────────────────────────────────────
+
+// Active camera backend: 0 = DJI Osmo Action, 1 = GoPro HERO8 and newer.
+#define DEFAULT_CAMERA_TYPE       CAMERA_DJI
 
 // Zero-based index of the RC channel used as the "Record" switch.
 // In Betaflight, AUX1 = channel 5 (index 4), AUX4 = channel 8 (index 7), etc.
-// Index 12 = AUX 9 (channel 13). Adjust to match your Betaflight Modes tab.
-#define AUX_CHANNEL_INDEX     8    // AUX4 — change to match your setup
+#define DEFAULT_AUX_CHANNEL_INDEX 8    // AUX5 — change to match your setup
 
 // Threshold (µs) above which the switch is considered ON (record).
-// Standard RC range is 1000-2000 µs. Mid-point is 1500.
-#define RC_SWITCH_THRESHOLD   1500
+#define DEFAULT_RC_THRESHOLD_US   1500
 
 // Debounce duration in milliseconds for the RC switch.
-// Prevents spurious toggles from noisy RC signals.
-#define RC_DEBOUNCE_MS        300
+#define DEFAULT_RC_DEBOUNCE_MS    300
+
+// Automatically start recording when the flight controller arms.
+#define DEFAULT_RECORD_ON_ARM     false
+
+// When record-on-arm is active, stop recording when the FC disarms.
+#define DEFAULT_STOP_ON_DISARM    true
+
+// RC channel used as a Wi-Fi on/off switch. 255 = disabled (AP always on).
+#define DEFAULT_WIFI_SWITCH_CH    255
+
+// SoftAP credentials for the Web UI (password empty = open network).
+#define WIFI_AP_DEFAULT_SSID      "ShutterLink"
+#define WIFI_AP_DEFAULT_PASS      "shutterlink"
+
+// Default content of Betaflight Custom Message slots 1..4 (OsdSlotContent).
+#define DEFAULT_OSD_SLOT_1        OSD_SLOT_CAM_STATUS
+#define DEFAULT_OSD_SLOT_2        OSD_SLOT_REC_TIME
+#define DEFAULT_OSD_SLOT_3        OSD_SLOT_BATTERY
+#define DEFAULT_OSD_SLOT_4        OSD_SLOT_LINK
+
+// Maximum characters per custom message (Betaflight MAX_NAME_LENGTH).
+#define OSD_MAX_TEXT_LEN          16
 
 // ──────────────────────────────────────────────────────────────────────────────
 // MSP Timing
@@ -47,6 +73,15 @@
 // How often to poll the FC for RC channel data (milliseconds).
 #define MSP_RC_POLL_INTERVAL_MS     200
 
+// How often to poll MSP_STATUS for arming state (milliseconds).
+#define MSP_STATUS_POLL_INTERVAL_MS 250
+
+// How often to poll MSP_ANALOG for battery voltage (milliseconds).
+#define MSP_ANALOG_POLL_INTERVAL_MS 1000
+
+// How often to poll MSP_BOXIDS (ARM bit index can change with config).
+#define MSP_BOXIDS_POLL_INTERVAL_MS 5000
+
 // Timeout waiting for an MSP response (milliseconds).
 #define MSP_RESPONSE_TIMEOUT_MS     500
 
@@ -54,38 +89,32 @@
 // OSD Configuration
 // ──────────────────────────────────────────────────────────────────────────────
 
-// How often to push OSD text to the FC (milliseconds).
-#define OSD_UPDATE_INTERVAL_MS      1000
+// How often to push custom-message text to the FC (milliseconds).
+#define OSD_UPDATE_INTERVAL_MS      500
 
-// OSD text position on the HD OSD grid.
-// DJI HD OSD grid is typically 50 columns × 18 rows (0-indexed).
-#define OSD_TEXT_ROW          14   // Near the bottom
-#define OSD_TEXT_COL          1    // Left-aligned
-
-// Text type for MSP2_COMMON_SET_TEXT.
-// 0 = PILOT_NAME, 1 = CRAFT_NAME, 2 = PID_PROFILE_NAME, 3 = RATE_PROFILE,
-// 4 = BUILDKEY, 5 = BOARD_NAME.  We use PILOT_NAME for custom OSD text.
-#define OSD_TEXT_TYPE         4
-
-// Maximum OSD text length (Betaflight caps pilot name at 16 chars typically).
-#define OSD_MAX_TEXT_LEN      16
+// Text types for MSP2_SET_TEXT (0x3007) — verified against Betaflight master:
+//   1 = PILOT_NAME   2 = CRAFT_NAME   3 = PID_PROFILE   4 = RATE_PROFILE
+//   7..10 = CUSTOM_MSG_0..3  (i.e. "Custom Message 1..4" in the OSD tab)
+#define MSP2TEXT_CUSTOM_MSG_0   7
 
 // ──────────────────────────────────────────────────────────────────────────────
-// BLE Configuration
+// BLE Configuration (DJI)
 // ──────────────────────────────────────────────────────────────────────────────
-
-// BLE scan duration in seconds (0 = scan forever, but we use timed scans).
-#define BLE_SCAN_DURATION_SEC     10
 
 // Interval between reconnection attempts (milliseconds).
 #define BLE_RECONNECT_INTERVAL_MS 5000
 
-// Keep-alive ping interval to the camera (milliseconds).
-// DJI cameras may drop idle BLE links after ~30 s.
+// Keep-alive ping interval to the DJI camera (milliseconds).
 #define BLE_KEEPALIVE_INTERVAL_MS 15000
 
 // BLE connection timeout (milliseconds).
 #define BLE_CONNECT_TIMEOUT_MS    10000
+
+// GoPro keep-alive interval — Open GoPro spec recommends every ~3 s.
+#define GOPRO_KEEPALIVE_INTERVAL_MS 3000
+
+// GoPro status re-query fallback (notifications usually keep values fresh).
+#define GOPRO_STATUS_POLL_MS      10000
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Status LED (optional, for visual feedback)

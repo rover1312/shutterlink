@@ -2,9 +2,9 @@
 // msp_protocol.h — MultiWii Serial Protocol (MSP) v1 & v2 interface
 // ============================================================================
 // Handles:
-//   • Building & sending MSP v1 requests (e.g., MSP_RC)
+//   • Building & sending MSP v1 requests (e.g., MSP_RC, MSP_STATUS)
 //   • Parsing MSP v1 responses (variable-length payloads)
-//   • Building & sending MSP v2 packets (e.g., MSP2_COMMON_SET_TEXT)
+//   • Building & sending MSP v2 packets (MSP2_SET_TEXT for custom messages)
 //   • CRC calculations (XOR for v1, CRC-DVB-S2 for v2)
 // ============================================================================
 
@@ -19,10 +19,20 @@
 // ──────────────────────────────────────────────────────────────────────────────
 
 // MSP v1 commands
+#define MSP_API_VERSION       1    // Resp: protocolVer u8, apiMajor u8, apiMinor u8
+#define MSP_FC_VARIANT        2    // Resp: 4-char identifier ("BTFL")
+#define MSP_FC_VERSION        3    // Resp: major u8, minor u8, patch u8
+#define MSP_BOARD_INFO        4    // Resp: identifier[4], revision u16, ...
+#define MSP_STATUS            101  // Resp: cycleTime u16, i2cErrors u16,
+                                   //       sensors u16, flightModeFlags u32,
+                                   //       pidProfile u8
+#define MSP_ANALOG            110  // Resp: vbat u8 (0.1V), mAhDrawn u16,
+                                   //       rssi u16, amperage i16
+#define MSP_BOXIDS            119  // Resp: array of active box IDs
 #define MSP_RC                105  // Request: no payload. Response: N×uint16 channels.
 
 // MSP v2 commands (16-bit IDs, sent via $X frame)
-#define MSP2_COMMON_SET_TEXT  0x203A  // Set OSD text element
+#define MSP2_SET_TEXT         0x3007  // Set OSD text element (pilot/craft/custom)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // MSP Packet Constants
@@ -57,9 +67,6 @@ enum MspParserState : uint8_t {
     MSP_V1_CMD,         // Expecting command byte
     MSP_V1_PAYLOAD,     // Receiving payload bytes
     MSP_V1_CRC,         // Expecting CRC byte (XOR checksum)
-    // (MSP v2 parsing is not needed for responses in this project,
-    //  because the FC only responds to MSP_RC via v1. But we include
-    //  the v2 *builder* for outgoing SET_TEXT packets.)
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -88,17 +95,31 @@ bool mspParseByte(uint8_t byte, MspMessage &outMsg);
 /// Send an MSP v1 request with no payload (e.g., MSP_RC poll).
 void mspSendRequest(uint8_t cmdId);
 
-/// Send an MSP v2 SET_TEXT packet to push OSD text to the FC.
-///   textType : 0=PILOT_NAME, 1=CRAFT_NAME, etc.
-///   row, col : position on the HD OSD grid.
-///   text     : null-terminated string to display.
-void mspSendOSDText(uint8_t textType, uint8_t row, uint8_t col,
-                    const char *text);
+/// Send a raw MSP v2 command packet ($X<) with arbitrary payload.
+void mspSendV2Command(uint16_t cmdId, const uint8_t *payload, uint16_t payloadLen);
+
+/// Send an MSP v2 SET_TEXT packet (0x3007) to set an OSD text element.
+///   textType : 1=PILOT_NAME, 2=CRAFT_NAME, … 7..10 = CUSTOM_MSG_0..3
+///   text     : null-terminated string (max OSD_MAX_TEXT_LEN chars).
+/// Payload layout: [type u8][len u8][chars…]
+void mspSendSetText(uint8_t textType, const char *text);
 
 /// Extract a single 16-bit unsigned RC channel value from an MSP_RC payload.
-///   channelIndex : 0-based index (0 = Roll, 1 = Pitch, …).
-///   msg          : a valid MSP_RC response message.
-/// Returns the channel value in µs (typically 1000–2000), or 0 on error.
 uint16_t mspGetRcChannel(const MspMessage &msg, uint8_t channelIndex);
+
+// Little-endian payload readers ------------------------------------------------
+
+inline uint16_t mspReadU16(const MspMessage &msg, uint8_t offset) {
+    if (offset + 1 >= msg.payloadSize) return 0;
+    return (uint16_t)msg.payload[offset] | ((uint16_t)msg.payload[offset + 1] << 8);
+}
+
+inline uint32_t mspReadU32(const MspMessage &msg, uint8_t offset) {
+    if (offset + 3 >= msg.payloadSize) return 0;
+    return (uint32_t)msg.payload[offset] |
+           ((uint32_t)msg.payload[offset + 1] << 8) |
+           ((uint32_t)msg.payload[offset + 2] << 16) |
+           ((uint32_t)msg.payload[offset + 3] << 24);
+}
 
 #endif // MSP_PROTOCOL_H
