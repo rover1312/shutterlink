@@ -419,6 +419,13 @@ void gpUpdate() {
 
     switch (_bleState) {
         case BLE_DISCONNECTED:
+            // Honour pending direct-connect (Web UI "Use" / camKick) at once
+            // instead of stalling until the next scan interval.
+            if (_doConnect) {
+                connectToCamera();
+                _doConnect = false;
+                break;
+            }
             if (now - _lastReconnectAttempt >= BLE_RECONNECT_INTERVAL_MS) {
                 _lastReconnectAttempt = now;
                 startScan();

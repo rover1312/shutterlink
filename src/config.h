@@ -107,6 +107,11 @@
 // Keep-alive ping interval to the DJI camera (milliseconds).
 #define BLE_KEEPALIVE_INTERVAL_MS 15000
 
+// DJI link-liveness watchdog: the camera pushes DUML telemetry constantly;
+// if no notification arrives within this window the link is considered
+// wedged and a reconnect is forced (milliseconds).
+#define DJI_LINK_STALE_MS         15000
+
 // BLE connection timeout (milliseconds).
 #define BLE_CONNECT_TIMEOUT_MS    10000
 
