@@ -38,6 +38,8 @@ static uint16_t               _sequenceCounter    = 1;
 static uint32_t _lastReconnectAttempt = 0;
 static uint32_t _lastKeepAlive        = 0;
 static uint32_t _pairingArmedTime     = 0;
+static uint32_t _authStartMs          = 0;   // When pairing handshake began
+static uint32_t _lastRxMs             = 0;   // Last inbound DUML notification
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Forward declarations
@@ -206,10 +208,13 @@ static bool connectToCamera() {
     }
 
     strlcpy(_telemetry.model, "DJI Osmo Action", sizeof(_telemetry.model));
+    _lastRxMs = millis();   // Don't trip the staleness watchdog right after connect
 
     // Start pairing sequence
     _bleState = BLE_AUTHENTICATING;
     _sessionEstablished = false;
+    _authStartMs = millis();   // Fresh timeout — _lastReconnectAttempt is stale
+                               // when we got here via direct connect (switching)
     sendPairingArm();
     return true;
 }
@@ -291,6 +296,17 @@ static void sendPairingArm() {
 }
 
 static void sendSetPairingPIN() {
+    // Semantics (hardware-verified by the osmosis project, Action 5 Pro /
+    // Osmo Nano — do NOT "fix" these into dynamic values):
+    //
+    //  • identifier ("001749319286102") — the camera stores its approval
+    //    UNDER this string.  A fixed constant is what makes the "already
+    //    paired" fast path (PairingStatus payload[1]==0x01) work, so the
+    //    ESP32 reconnects silently instead of re-approval every boot.
+    //    Retries must always carry the SAME identifier.
+    //  • token ("osmo") — purely cosmetic on cameras: displayed verbatim
+    //    on screen (as "OSMO"); the on-screen approve tap is the real
+    //    gate.  No numeric PIN needs to be read from the camera.
     uint8_t packet[64];
 
     // Payload: PackString("001749319286102") + PackString("osmo")
@@ -335,6 +351,7 @@ static void sendKeepAlive() {
 static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
                            size_t length, bool isNotify) {
     const char *charName = (pChar == _pAuthChar) ? "FFF4" : "FFF5";
+    _lastRxMs = millis();   // Any inbound traffic proves the link is alive
 
     if (length < 13 || pData[0] != 0x55) {
         char hexBuf[128] = "";
@@ -354,17 +371,19 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
         charName, flags, cmdSet, cmdId, length);
 
     // Check for Pairing Status Response (flags=0xC0, set=0x07, id=0x45)
+    // Payload: [00][status] — status 0x01 = already paired, 0x02 = approval
+    // required.  Status lives at pData[12] (payload[1]); guard needs >= 13.
     if (flags == 0xC0 && cmdSet == 0x07 && cmdId == 0x45) {
-        if (length >= 12) {
-            DBG("DJI: Pairing Status Payload: %02X %02X %02X", pData[11], pData[12], pData[13]);
+        if (length >= 13) {
+            DBG("DJI: Pairing Status Payload: %02X %02X", pData[11], pData[12]);
             // payload[1] == 0x01 means Already Paired
-            if (pData[12] == 0x01 || pData[11] == 0x01) {
+            if (pData[12] == 0x01) {
                 _sessionEstablished = true;
                 _bleState = BLE_CONNECTED;
                 DBG("DJI: *** ALREADY PAIRED - SESSION ESTABLISHED ***");
             }
             // payload[1] == 0x02 means Approval Required
-            else if (pData[12] == 0x02 || pData[11] == 0x02) {
+            else if (pData[12] == 0x02) {
                 DBG("DJI: Approval required - TAP APPROVE ON CAMERA SCREEN!");
             }
         }
@@ -407,6 +426,14 @@ void djiUpdate() {
 
     switch (_bleState) {
         case BLE_DISCONNECTED:
+            // A pending direct-connect (Web UI "Use" / camKick) must be
+            // honoured immediately — don't wait out the reconnect interval,
+            // and never let startScan() clobber the request.
+            if (_doConnect) {
+                connectToCamera();
+                _doConnect = false;
+                break;
+            }
             if (now - _lastReconnectAttempt >= BLE_RECONNECT_INTERVAL_MS) {
                 _lastReconnectAttempt = now;
                 startScan();
@@ -426,7 +453,7 @@ void djiUpdate() {
                 _pairingArmedTime = 0; // Only send once
                 sendSetPairingPIN();
             }
-            if (now - _lastReconnectAttempt >= 30000) {
+            if (now - _authStartMs >= 30000) {
                 DBG("DJI: Auth timeout (30s) — resetting");
                 if (_pClient) _pClient->disconnect();
                 _bleState = BLE_DISCONNECTED;
@@ -436,6 +463,17 @@ void djiUpdate() {
 
         case BLE_CONNECTED:
             if (!_pClient || !_pClient->isConnected()) {
+                _bleState = BLE_DISCONNECTED;
+                break;
+            }
+            // Liveness watchdog: the camera pushes DUML notifications
+            // constantly (~1 Hz GeneralStatus and up).  If nothing arrives
+            // for a long while the link is wedged even if the BLE stack
+            // hasn't noticed yet — force a reconnect.
+            if (now - _lastRxMs >= DJI_LINK_STALE_MS) {
+                DBG("DJI: No camera traffic for %d s — forcing reconnect",
+                    DJI_LINK_STALE_MS / 1000);
+                _pClient->disconnect();
                 _bleState = BLE_DISCONNECTED;
                 break;
             }
