@@ -128,6 +128,23 @@ void camKick() {
     else                                    djiTargetMac(c.mac);
 }
 
+// Disconnect current camera and stop BLE operations (for UI disconnect)
+void camDisconnect() {
+    shutdownActiveBackend();
+    
+    // Clear active camera flag in settings
+    ShutterSettings &s = settingsGet();
+    for (uint8_t i = 0; i < s.camCount; i++) {
+        if (s.cams[i].active) {
+            s.cams[i].active = false;
+            break;
+        }
+    }
+    settingsSave();
+    
+    DBG("CAM: disconnected active camera");
+}
+
 // User-initiated one-shot discovery scan.  Called from the /api/camera
 // {scan:true} endpoint — the ONLY code path that may start a discovery
 // scan.  djiUpdate()/gpUpdate() will NOT auto-restart the scan after the

@@ -404,7 +404,7 @@ static void handleCameraPost() {
             return;
         }
         // Also disconnect BLE if removing the active camera
-        shutdownActiveBackend();
+        camDisconnect();
         _server.send(200, "application/json", "{\"ok\":true}");
     } else if (jsonHas(body, "pair")) {
         // "pair" body: {"mac":"AA:BB:...","type":0|1}
