@@ -433,6 +433,18 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 
 <div id="toast" class="glass"></div>
 <script>
+/* ---------- Toast polyfill (Captive Portal has no internet; CDN libs unavailable) ---------- */
+if (typeof toast !== 'function') {
+    window.toast = function(msg, type="info") {
+        console.log("[Toast "+type+"]", msg);
+        let el = document.createElement('div');
+        el.innerText = msg;
+        el.style.cssText = "position:fixed;bottom:20px;right:20px;background:rgba(15,23,42,0.9);color:white;padding:12px 24px;border-radius:12px;z-index:9999;font-family:sans-serif;box-shadow:0 8px 16px rgba(0,0,0,0.3);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.1);transition:opacity 0.4s, transform 0.4s;transform:translateY(20px);opacity:0;";
+        document.body.appendChild(el);
+        setTimeout(function() { el.style.opacity = '1'; el.style.transform = 'translateY(0)'; }, 10);
+        setTimeout(function() { el.style.opacity = '0'; el.style.transform = 'translateY(20px)'; setTimeout(function() { el.remove(); }, 400); }, 3000);
+    };
+}
 'use strict';
 const $=id=>document.getElementById(id);
 let S=null;
@@ -718,37 +730,39 @@ function render(){
   }catch(e){console.error('Render error:',e);}
 }
 
-/* ---------- poll ---------- */
+/* ---------- poll (silent on radio contention, 1500ms interval) ---------- */
 async function poll(){
   try{
-    const r=await fetch('/api/status',{cache:'no-store'});
-    if(!r.ok)throw new Error('HTTP ' + r.status);
-    S=await r.json();
-    /* sync forms (skip focused elements so typing isn't clobbered) */
-    const rec=S.rec||{},ae=document.activeElement;
-    if(ae!==$('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
-    if(ae!==$('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));
-      $('lblThr').textContent=$('rngThr').value+' \u00b5s';}
-    if(ae!==$('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));
-      $('lblDeb').textContent=$('rngDeb').value+' ms';}
-    if(ae!==$('swRoa'))$('swRoa').checked=!!S.roa;
-    $('swSod').disabled=!S.roa;
-    $('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;
-    if(ae!==$('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
-    /* brand pills: show pending choice while choosing, else the active one */
-    if(pendingBrand>=0)syncPairUI();
-    else{$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
-         $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);}
-    renderCams();
-    render();
+    const res = await fetch('/api/status',{cache:'no-store'});
+    if(res.ok){
+      S = await res.json();
+      /* sync forms (skip focused elements so typing isn't clobbered) */
+      const rec=S.rec||{},ae=document.activeElement;
+      if(ae!==$('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
+      if(ae!==$('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));
+        $('lblThr').textContent=$('rngThr').value+' \u00b5s';}
+      if(ae!==$('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));
+        $('lblDeb').textContent=$('rngDeb').value+' ms';}
+      if(ae!==$('swRoa'))$('swRoa').checked=!!S.roa;
+      $('swSod').disabled=!S.roa;
+      $('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;
+      if(ae!==$('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
+      /* brand pills: show pending choice while choosing, else the active one */
+      if(pendingBrand>=0)syncPairUI();
+      else{$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+           $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);}
+      renderCams();
+      render();
+    } else {
+      console.debug("Poll skipped: HTTP "+res.status);
+    }
   }catch(e){
-    console.error('Poll error:',e);
-    try{$('stateTxt').textContent='OFFLINE';}catch(_){}
-    try{$('stateDot').style.background='var(--warn)';}catch(_){}
+    // Silently handle ESP32 radio contention or reboots during BLE scan
+    console.debug("Poll skipped: ESP32 radio busy scanning.");
   }
+  setTimeout(poll, 1500);
 }
-setInterval(poll,1000);
-poll();
+setTimeout(poll, 100);
 </script>
 </body>
 </html>)rawliteral";

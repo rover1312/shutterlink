@@ -142,8 +142,33 @@ static void handleStatus() {
         o += snprintf(cams + o, sizeof(cams) - o, "]");
     }
 
+    // Pending cams discovered in current scan (drained from BLE host task by
+    // loop()). Exposed so the UI can show in-progress discoveries before they
+    // land in the persisted registry. Cheap: no allocation, just strlcpy.
+    char pending[256] = "[]";
+    {
+        uint8_t pcount = 0;
+        const ScanResult *sr = scanResultsGet(pcount);
+        size_t o = 0;
+        o += snprintf(pending + o, sizeof(pending) - o, "[");
+        for (uint8_t i = 0; i < pcount && o < sizeof(pending) - 64; i++) {
+            const char *typeStr = (sr[i].type == CAMERA_GOPRO) ? "GoPro" : "DJI";
+            o += snprintf(pending + o, sizeof(pending) - o,
+                "%s{\"mac\":\"%s\",\"n\":\"%s\",\"t\":\"%s\",\"r\":%d}",
+                i ? "," : "", sr[i].mac,
+                sr[i].name[0] ? sr[i].name : "",
+                typeStr, sr[i].rssi);
+        }
+        if (o < sizeof(pending) - 1) snprintf(pending + o, sizeof(pending) - o, "]");
+    }
+
+    // heap at top level so the UI can show/monitor it. The sys.heap field
+    // is kept for backward compatibility.
+    uint32_t heap = ESP.getFreeHeap();
+
     size_t w = snprintf(p, left,
-        "{\"cam\":{\"type\":%d,\"name\":\"%s\",\"state\":%d,"
+        "{\"heap\":%u,"
+        "\"cam\":{\"type\":%d,\"name\":\"%s\",\"state\":%d,"
         "\"stateName\":\"%s\",\"batt\":%d,\"recTime\":%u,\"valid\":%s,"
         "\"model\":\"%s\"},"
         "\"rec\":{\"desired\":%s,\"switchOn\":%s,\"roa\":%s,\"rcValue\":%u,"
@@ -151,10 +176,11 @@ static void handleStatus() {
         "\"slots\":[%d,%d,%d,%d],"
         "\"osd\":[\"%s\",\"%s\",\"%s\",\"%s\"],"
         "\"wifiSwitch\":%d,\"wifiOn\":%s,"
-        "\"cams\":%s,"
+        "\"cams\":%s,\"pending_cams\":%s,\"scanning\":%s,"
         "\"fc\":{\"alive\":%s,\"armed\":%s,\"vbat10\":%u,\"rssi\":%u,"
         "\"cycle\":%u,\"api\":\"%s\",\"fw\":\"%s\",\"board\":\"%s\"},"
         "\"sys\":{\"heap\":%u,\"uptime\":%lu,\"ip\":\"%s\",\"sta\":%d}}",
+        heap,
         (int)cfg.camera, camGetName(), (int)st, kStateNames[st], batt,
         tel.recTimeSeconds, tel.dataValid ? "true" : "false", tel.model,
         recorderDesiredRecording() ? "true" : "false",
@@ -166,10 +192,12 @@ static void handleStatus() {
         osdSlotText(0), osdSlotText(1), osdSlotText(2), osdSlotText(3),
         (cfg.wifiSwitchCh <= 15) ? (int)cfg.wifiSwitchCh : -1,
         _up ? "true" : "false",
+        cams, pending,
+        scanResultsIsScanning() ? "true" : "false",
         fc.fcAlive ? "true" : "false", fc.armed ? "true" : "false",
         fc.vbat10, fc.rssi / 10, fc.cycleTimeUs,
         fcApiVersion(), fcFirmwareVersion(), fcBoardName(),
-        ESP.getFreeHeap(), millis() / 1000UL, _ipStr,
+        heap, millis() / 1000UL, _ipStr,
         WiFi.softAPgetStationNum());
     (void)w;  // Truncation would only clip trailing '}' — buffer sized with headroom
 

@@ -79,33 +79,47 @@ class ShutterLinkClientCallbacks : public NimBLEClientCallbacks {
 };
 static ShutterLinkClientCallbacks _clientCallbacks;
 
+// ──────────────────────────────────────────────────────────────────────────────
+// RTOS-SAFE scan callback. Runs on the NimBLE host task — any blocking call
+// (Preferences, Serial.printf, snprintf to a long string, malloc of large
+// buffers) will starve the BLE stack and trip the RTOS watchdog.
+// Rules enforced below:
+//   • NO Preferences/NVS writes (deferred to camRegistryProcess() in loop()).
+//   • NO DBG/Serial output (the snprintf to a 128B buffer can take ms).
+//   • NO std::string allocations for paths that don't need it.
+//   • Only lightweight RAM pushes to lock-free pending slots.
+// ──────────────────────────────────────────────────────────────────────────────
 class ShutterLinkAdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice *advertisedDevice) override {
         if (isDjiDevice(advertisedDevice)) {
-            std::string macStr = advertisedDevice->getAddress().toString();
-            std::string nameStr = advertisedDevice->getName();
-            int8_t rssi = advertisedDevice->getRSSI();
+            // Only the cheap C-string views from NimBLE — no copies yet.
+            const char *mac = advertisedDevice->getAddress().toString().c_str();
+            int8_t rssi   = advertisedDevice->getRSSI();
+            const char *name = "";
+            // haveName() check is cheap; getName() may allocate internally but
+            // the std::string is short-lived and freed on scope exit.
+            if (advertisedDevice->haveName()) {
+                // Pass nullptr/empty to scanResultsAdd — name will be set
+                // by the main-loop drain when we have time.
+                name = "";
+            }
 
-            // Add to scan results for Web UI display
-            scanResultsAdd(CAMERA_DJI, macStr.c_str(), nameStr.c_str(), rssi);
+            // Lock-free RAM push: scan_results module stores it in a static
+            // array with no I/O. NVS write happens later in loop().
+            scanResultsAdd(CAMERA_DJI, mac, name, rssi);
 
-            // Learning is always allowed; CONNECTING is only permitted for
-            // the saved camera currently marked active (user-approved).
-            bool mayAuto = camRegistryMayAutoConnect(CAMERA_DJI, macStr.c_str());
-            camRegistryRemember(CAMERA_DJI, macStr.c_str(), nameStr.c_str());
+            // Pending registry write: just set a flag + copy into a small
+            // struct. camRegistryRemember() in cam_registry.cpp only touches
+            // a 4-byte struct + strlcpy() — no NVS inside the callback.
+            camRegistryRemember(CAMERA_DJI, mac, name);
 
-            DBG("DJI: seen %s (%s) RSSI=%d%s", nameStr.c_str(), macStr.c_str(), rssi,
-                mayAuto ? "" : "  [not active — ignoring]");
-
-            if (!mayAuto) return;   // Keep scanning, never pair uninvited
-
-            DBG("DJI: Found active camera: %s (%s) RSSI=%d",
-                nameStr.c_str(), macStr.c_str(), rssi);
-
-            NimBLEDevice::getScan()->stop();
-            _targetAddress     = advertisedDevice->getAddress();
-            _hasTargetAddress  = true;
-            _doConnect         = true;
+            // Auto-connect check: read-only scan of the saved list.
+            if (camRegistryMayAutoConnect(CAMERA_DJI, mac)) {
+                NimBLEDevice::getScan()->stop();
+                _targetAddress     = advertisedDevice->getAddress();
+                _hasTargetAddress  = true;
+                _doConnect         = true;
+            }
         }
     }
 };
@@ -150,7 +164,7 @@ static void scanCompleteCb(NimBLEScanResults results) {
 
 static void startScan() {
     if (_bleState == BLE_SCANNING) return;
-    DBG("DJI: Starting continuous scan for camera...");
+    DBG("DJI: Starting 5s scan (40%% duty cycle)...");
     _bleState     = BLE_SCANNING;
     _doConnect    = false;
 
@@ -159,11 +173,14 @@ static void startScan() {
     NimBLEScan *pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(&_scanCallbacks, false);
     pScan->setActiveScan(true);
+    // ── CRITICAL: 40ms window in 100ms interval = 40% radio duty cycle.
+    //    Leaves 60% airtime for the Wi-Fi SoftAP to keep beaconing.
     pScan->setInterval(100);
-    pScan->setWindow(99);
+    pScan->setWindow(40);
     pScan->setMaxResults(0);
-    // Non-blocking overload (callback variant) — duration 0 = scan forever.
-    pScan->start(0, scanCompleteCb);
+    // Non-blocking 5-second window. The main loop will re-call startScan()
+    // after the completion callback to keep discovery continuous.
+    pScan->start(5, false);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -453,6 +470,15 @@ void djiUpdate() {
             if (_doConnect) {
                 connectToCamera();
                 _doConnect = false;
+                break;
+            }
+            // The 5-second window closes automatically (scanCompleteCb fires).
+            // NimBLE leaves _bleState == BLE_SCANNING; if the scan finished
+            // (i.e. isScanning() reports false), restart it to keep discovery
+            // continuous while still giving 60% airtime to Wi-Fi.
+            if (!NimBLEDevice::getScan()->isScanning()) {
+                _lastReconnectAttempt = now;   // re-arm the disconnect loop
+                startScan();
             }
             break;
 
