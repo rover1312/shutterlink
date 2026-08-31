@@ -115,7 +115,7 @@ static void handleStatus() {
 
     BleConnectionState st = camGetState();
     static const char *kStateNames[] =
-        {"OFF", "SCANNING", "CONNECTING", "PAIRING", "READY"};
+        {"OFF", "SCANNING", "CONNECTING", "PAIRING", "CONNECTED"};
 
     int batt = tel.batteryPercent <= 100 ? tel.batteryPercent : -1;
 
