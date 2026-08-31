@@ -382,7 +382,9 @@ static void handleCameraPost() {
         // Refuse to start a second scan while one is in progress so the
         // 5 s window is not split across two competing jobs on the radio.
         if (scanResultsIsScanning()) {
-            sendJsonError("scan already running");
+            // Graceful degradation: tell the UI we are already scanning,
+            // don't throw 400.
+            _server.send(200, "application/json", "{\"ok\":true,\"already\":true}");
             return;
         }
         camStartUserScan();

@@ -17,7 +17,7 @@
 #include "settings.h"
 
 #define MAX_SCAN_RESULTS      10
-#define SCAN_RESULT_TTL_MS    10000UL   // evict entries not seen for >10s
+#define SCAN_RESULT_TTL_MS    15000UL   // evict entries not seen for >15s
 
 struct ScanResult {
     uint8_t type;               // CameraType (CAMERA_DJI / CAMERA_GOPRO)
@@ -26,6 +26,7 @@ struct ScanResult {
     int8_t  rssi;               // Signal strength in dBm
     bool    saved;              // True if in saved camera registry
     bool    active;             // True if this is the active saved camera
+    bool    isMatched;          // True if device matches camera filter (name/OUI/service)
     uint32_t lastSeen;          // millis() when last seen
 };
 
@@ -43,12 +44,13 @@ void scanResultsStart();
 /// @param mac MAC address string
 /// @param name Device name (may be empty)
 /// @param rssi Signal strength in dBm
-void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi);
+/// @param isMatched True if device matches camera filter (name/OUI/service)
+void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi, bool isMatched);
 
 /// Clear all scan results (call when starting a new scan).
 void scanResultsClear();
 
-/// Get the current scan results array.
+/// Get the current scan results array (insertion order).
 /// @param count Output parameter for number of results
 /// @return Pointer to scan results array (valid until next clear)
 const ScanResult* scanResultsGet(uint8_t &count);
@@ -68,5 +70,15 @@ bool scanResultsIsScanning();
 
 /// Update saved/active status for all results based on current registry.
 void scanResultsUpdateSavedStatus();
+
+/// Set "Show All" mode: when true, onResult() accepts ANY advertiser.
+void scanResultsSetShowAll(bool enabled);
+
+/// Get current "Show All" mode.
+bool scanResultsIsShowAll();
+
+/// Evict stale entries (lastSeen > SCAN_RESULT_TTL_MS ago).
+/// Call from main loop() before webUpdate().
+void scanResultsEvictStale();
 
 #endif // SCAN_RESULTS_H

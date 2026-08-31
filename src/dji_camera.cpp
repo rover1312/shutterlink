@@ -99,7 +99,14 @@ static ShutterLinkClientCallbacks _clientCallbacks;
 // ──────────────────────────────────────────────────────────────────────────────
 class ShutterLinkAdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice *advertisedDevice) override {
-        if (!isDjiDevice(advertisedDevice)) return;
+        // Check if device matches our filter OR if "Show All" mode is enabled.
+        bool isMatched = isDjiDevice(advertisedDevice);
+        if (!isMatched && scanResultsIsShowAll()) {
+            // In "Show All" mode, accept any device with a valid address.
+            std::string addr = advertisedDevice->getAddress().toString();
+            isMatched = !addr.empty();
+        }
+        if (!isMatched) return;
 
         // Copy the address and name into local std::strings.  NimBLE returns
         // std::string temporaries from getAddress().toString() and
@@ -115,7 +122,7 @@ class ShutterLinkAdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallba
 
         // Lock-free RAM push: scan_results module stores it in a static
         // array with no I/O. NVS write happens later in loop().
-        scanResultsAdd(CAMERA_DJI, macStr.c_str(), nameStr.c_str(), rssi);
+        scanResultsAdd(CAMERA_DJI, macStr.c_str(), nameStr.c_str(), rssi, isMatched);
 
         // Pending registry write: just set a flag + copy into a small
         // struct. camRegistryRemember() in cam_registry.cpp only touches

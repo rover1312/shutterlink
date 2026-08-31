@@ -15,6 +15,7 @@ static ScanResult _results[MAX_SCAN_RESULTS];
 static uint8_t _count = 0;
 static bool _scanning = false;
 static bool _scanComplete = false;
+static bool _showAll = false;  // "Show All Nearby Devices" mode
 
 static bool macEquals(const char *a, const char *b) {
     return a && b && strcasecmp(a, b) == 0;
@@ -62,6 +63,7 @@ void scanResultsInit() {
     _count = 0;
     _scanning = false;
     _scanComplete = false;
+    _showAll = false;
     memset(_results, 0, sizeof(_results));
 }
 
@@ -76,7 +78,7 @@ void scanResultsStart() {
     memset(_results, 0, sizeof(_results));
 }
 
-void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi) {
+void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi, bool isMatched) {
     if (!mac || !*mac) return;
     if (!_scanning && !_scanComplete) return; // Only collect during active scan
 
@@ -89,6 +91,7 @@ void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi
         // Update existing entry (always; this is a fresh sighting).
         _results[idx].rssi = rssi;
         _results[idx].lastSeen = now;
+        _results[idx].isMatched = isMatched;
         if (name && *name) {
             strlcpy(_results[idx].name, name, sizeof(_results[idx].name));
         }
@@ -102,6 +105,7 @@ void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi
         strlcpy(r.mac, mac, sizeof(r.mac));
         strlcpy(r.name, name ? name : "", sizeof(r.name));
         r.rssi = rssi;
+        r.isMatched = isMatched;
         r.saved = false;
         r.active = false;
         r.lastSeen = now;
@@ -123,6 +127,7 @@ void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi
     strlcpy(w.mac, mac, sizeof(w.mac));
     strlcpy(w.name, name ? name : "", sizeof(w.name));
     w.rssi = rssi;
+    w.isMatched = isMatched;
     w.saved = false;
     w.active = false;
     w.lastSeen = now;
@@ -203,4 +208,22 @@ void scanResultsUpdateSavedStatus() {
             }
         }
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// "Show All" mode API
+// ──────────────────────────────────────────────────────────────────────────────
+
+void scanResultsSetShowAll(bool enabled) {
+    _showAll = enabled;
+}
+
+bool scanResultsIsShowAll() {
+    return _showAll;
+}
+
+/// Evict stale entries (lastSeen > SCAN_RESULT_TTL_MS ago).
+/// Call from main loop() before webUpdate().
+void scanResultsEvictStale() {
+    evictStale();
 }

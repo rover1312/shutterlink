@@ -384,7 +384,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div id="camList"></div>
   </div>
 
-  <!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
+<!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
   <div class="glass card">
     <h2><svg class="ic"><use href="#i-refresh"/></svg>Discover new camera</h2>
     <div class="seg" id="discoverSeg">
@@ -394,7 +394,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <button class="btn primary" id="scanBtn" disabled>
         <svg class="ic" style="vertical-align:middle" id="scanIcon"><use href="#i-refresh"/></svg>
-        <span id="scanBtnTxt">Scan for Cameras</span>
+        <span id="scanBtnTxt">Pick a brand first</span>
       </button>
       <span id="scanCountdown" style="font-size:12px;color:var(--dim)"></span>
     </div>
@@ -407,13 +407,13 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div id="scanAllHint" class="note" style="display:none">
       <b>Showing every advertiser with a valid address.</b> Hold the camera
       within 1&nbsp;m — the strongest signal is usually yours. Pick your
-      device and tap <b>Pair &amp; Save</b>; if the connection fails with
-      &ldquo;not a &lt;brand&gt; camera&rdquo; you picked the wrong one.
+      device and tap <b>Pair & Save</b>; if the connection fails with
+      &ldquo;not a <brand> camera&rdquo; you picked the wrong one.
     </div>
     <div id="discList" style="margin-top:14px"></div>
     <div class="note"><b>How pairing works:</b> 1) pick the brand &rarr; 2) press
       <b>Scan for Cameras</b> &rarr; 3) power the camera on nearby &rarr; 4) tap
-      <b>Pair &amp; Save</b> on the device. Nothing connects until you confirm.
+      <b>Pair & Save</b> on the device. Nothing connects until you confirm.
       First GoPro connection needs one approval tap on the camera screen; DJI
       may show an approve prompt too.</div>
   </div>
@@ -701,33 +701,50 @@ function syncDiscoverUI(){
     const now=Date.now();
     const cdLeft=Math.max(0,Math.ceil((scanCooldownUntil-now)/1000));
 
-    // Three explicit UI states — driven ONLY by user action + cooldown,
-    // never by the backend's auto-scan state. This prevents the button
-    // from being stuck on "Scanning…" just because cam_manager is doing
-    // its own background re-scan loop.
+    // 3-step UI state machine for Discover card:
+    // State 1: No brand picked → button disabled, "Pick a brand first"
+    // State 2: Scanning (10s cooldown) → disabled, countdown, spinner (first 5s)
+    // State 3: Completed → enabled, "Show All" toggle visible
+    if(pendingBrand<0){
+      // State 1: No brand picked
+      btn.disabled=true;
+      txt.textContent='Pick a brand first';
+      sp.style.display='none';
+      $('scanAllToggle').style.display='none';
+      $('scanAllHint').style.display='none';
+      return;
+    }
+
     if(userScanActive && cdLeft>0){
-      // Cooldown is in progress: disable, show countdown, hide spinner.
+      // State 2: Cooldown in progress (scan window or cooldown)
       btn.disabled=true;
       txt.textContent='Scan for Cameras (Ready in '+cdLeft+'s)';
-      sp.style.display='none';
-    }else if(userScanActive && cdLeft<=0){
-      // Cooldown elapsed: re-enable for the next user click.
+      // Spinner only during first 5s (scan window), then hidden for remaining cooldown
+      if(cdLeft > 5) sp.style.display='flex'; else sp.style.display='none';
+      $('scanAllToggle').style.display='none';
+      $('scanAllHint').style.display='none';
+      return;
+    }
+
+    if(userScanActive && cdLeft<=0){
+      // Cooldown elapsed: re-enable for the next user click
       userScanActive=false;
       btn.disabled=(pendingBrand<0);
       txt.textContent=pendingBrand<0?'Pick a brand first'
         :('Scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
       sp.style.display='none';
-    }else if(pendingBrand<0){
-      // No brand picked yet: disabled with hint.
-      btn.disabled=true;
-      txt.textContent='Pick a brand first';
-      sp.style.display='none';
-    }else{
-      // Ready: enabled, label shows what brand will be scanned.
-      btn.disabled=false;
-      txt.textContent='Scan for '+(pendingBrand?'GoPro':'DJI Osmo');
-      sp.style.display='none';
+      $('scanAllToggle').style.display='inline';
+      $('scanAllHint').style.display='none';
+      return;
     }
+
+    // State 3: Ready (no active scan, brand picked)
+    btn.disabled=false;
+    txt.textContent='Scan for '+(pendingBrand?'GoPro':'DJI Osmo');
+    sp.style.display='none';
+    $('scanAllToggle').style.display='inline';
+    // Show/hide hint based on S.scanAll (backend setting)
+    $('scanAllHint').style.display = (S && S.scanAll) ? 'block' : 'none';
   }catch(e){console.error('syncDiscoverUI error:',e);}
 }
 
