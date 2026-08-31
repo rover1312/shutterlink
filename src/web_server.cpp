@@ -403,6 +403,8 @@ static void handleCameraPost() {
             sendJsonError("invalid camera index");
             return;
         }
+        // Also disconnect BLE if removing the active camera
+        shutdownActiveBackend();
         _server.send(200, "application/json", "{\"ok\":true}");
     } else if (jsonHas(body, "pair")) {
         // "pair" body: {"mac":"AA:BB:...","type":0|1}
@@ -412,15 +414,22 @@ static void handleCameraPost() {
             sendJsonError("pair: mac and type required");
             return;
         }
-        // Use the name from the discovered list if we have one (better UX).
-        char nameBuf[24] = "";
+        // Check if device is currently visible in scan results (online check)
         uint8_t dcount = 0;
         const ScanResult *dr = camRegistryDiscovered(dcount);
+        bool isOnline = false;
+        char nameBuf[24] = "";
         for (uint8_t i = 0; i < dcount; i++) {
             if (strcasecmp(dr[i].mac, mac.c_str()) == 0 && dr[i].type == (uint8_t)type) {
+                isOnline = true;
                 strlcpy(nameBuf, dr[i].name, sizeof(nameBuf));
                 break;
             }
+        }
+        // Don't allow pairing with offline devices
+        if (!isOnline) {
+            sendJsonError("Cannot pair: device is offline or not in range");
+            return;
         }
         if (!camRegistrySave((uint8_t)type, mac.c_str(),
                               nameBuf[0] ? nameBuf : mac.c_str())) {
