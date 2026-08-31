@@ -362,8 +362,41 @@ static void handleCameraPost() {
             return;
         }
         _server.send(200, "application/json", "{\"ok\":true}");
+    } else if (jsonHas(body, "pair")) {
+        // "pair" body: {"mac":"AA:BB:...","type":0|1}
+        String mac = jsonGetStr(body, "mac");
+        long type = jsonGetNum(body, "type", -1);
+        if (!mac.length() || (type != CAMERA_DJI && type != CAMERA_GOPRO)) {
+            sendJsonError("pair: mac and type required");
+            return;
+        }
+        // Use the name from the discovered list if we have one (better UX).
+        char nameBuf[24] = "";
+        uint8_t dcount = 0;
+        const ScanResult *dr = camRegistryDiscovered(dcount);
+        for (uint8_t i = 0; i < dcount; i++) {
+            if (strcasecmp(dr[i].mac, mac.c_str()) == 0 && dr[i].type == (uint8_t)type) {
+                strlcpy(nameBuf, dr[i].name, sizeof(nameBuf));
+                break;
+            }
+        }
+        if (!camRegistrySave((uint8_t)type, mac.c_str(),
+                              nameBuf[0] ? nameBuf : mac.c_str())) {
+            sendJsonError("pair: registry full or invalid");
+            return;
+        }
+        // Find the newly-saved entry's index and select+kick it.
+        for (uint8_t i = 0; i < settingsGet().camCount; i++) {
+            if (strcasecmp(settingsGet().cams[i].mac, mac.c_str()) == 0 &&
+                settingsGet().cams[i].type == (uint8_t)type) {
+                camRegistrySelect(i);
+                camKick();
+                break;
+            }
+        }
+        _server.send(200, "application/json", "{\"ok\":true}");
     } else {
-        sendJsonError("expected select or remove");
+        sendJsonError("expected select, remove, or pair");
     }
 }
 
@@ -461,30 +494,27 @@ static void handleMspPost() {
 // ──────────────────────────────────────────────────────────────────────────────
 
 static void handleScanResults() {
-    uint8_t count = 0;
-    const ScanResult *results = scanResultsGet(count);
+    uint8_t dcount = 0;
+    const ScanResult *dr = camRegistryDiscovered(dcount);
 
     static char buf[4096];
     char *p = buf;
     size_t left = sizeof(buf);
 
-    size_t w = snprintf(p, left, "{\"scanning\":%s,\"results\":[", scanResultsIsScanning() ? "true" : "false");
+    size_t w = snprintf(p, left, "{\"scanning\":%s,\"results\":[",
+                        scanResultsIsScanning() ? "true" : "false");
     p += w;
     left -= w;
 
-    for (uint8_t i = 0; i < count; i++) {
-        const ScanResult &r = results[i];
-        const char *typeStr = (r.type == CAMERA_GOPRO) ? "GoPro" : "DJI Osmo";
-
+    for (uint8_t i = 0; i < dcount; i++) {
+        const char *typeStr = (dr[i].type == CAMERA_GOPRO) ? "GoPro" : "DJI Osmo";
         w = snprintf(p, left,
-            "%s{\"mac\":\"%s\",\"name\":\"%s\",\"type\":\"%s\",\"rssi\":%d,\"saved\":%s,\"active\":%s}",
+            "%s{\"mac\":\"%s\",\"name\":\"%s\",\"t\":\"%s\",\"r\":%d}",
             i ? "," : "",
-            r.mac,
-            r.name[0] ? r.name : "Unknown",
+            dr[i].mac,
+            dr[i].name[0] ? dr[i].name : "",
             typeStr,
-            r.rssi,
-            r.saved ? "true" : "false",
-            r.active ? "true" : "false");
+            dr[i].rssi);
         p += w;
         if (w >= left) break;
         left -= w;

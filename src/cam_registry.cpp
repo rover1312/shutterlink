@@ -1,6 +1,18 @@
 // ============================================================================
 // cam_registry.cpp — Saved camera registry
 // ============================================================================
+//
+// Two-tier design:
+//   • _discovered[]  — in-RAM only; populated by camRegistryRemember() during
+//     BLE scans. Used by the Web UI to show "Discovered cameras" (Card 3).
+//     NEVER auto-persisted to NVS. Cleared on reboot (intentional).
+//   • s.cams[]       — persisted to NVS. Only written when the user clicks
+//     "Pair & Save" on a discovered camera, which calls camRegistrySave().
+//
+// This fixes the "ghost device" bug: neighbour's cameras that the radio
+// briefly sees will appear in Card 3 as transient discovered devices, but
+// will NOT be silently written to flash.
+// ============================================================================
 
 #include "cam_registry.h"
 #include "camera_manager.h"
@@ -8,6 +20,7 @@
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Pending discovery slot (written from BLE host task, drained from loop)
+// Lock-free: only writes to a static struct, no NVS, no allocation.
 // ──────────────────────────────────────────────────────────────────────────────
 
 static struct {
@@ -16,6 +29,9 @@ static struct {
     char    mac[18];
     char    name[24];
 } _pending;
+
+static ScanResult _discovered[MAX_SCAN_RESULTS];
+static uint8_t    _discoveredCount = 0;
 
 void camRegistryRemember(uint8_t type, const char *mac, const char *name) {
     if (!mac || !*mac) return;
@@ -88,42 +104,74 @@ void camRegistryLoad() {
     prefs.end();
 }
 
+/// Drain the BLE host task's pending slot into the in-RAM _discovered[] array.
+/// Does NOT touch NVS. Does NOT auto-activate anything. Safe to call from
+/// loop() (not from the NimBLE host task).
 void camRegistryProcess() {
     if (!_pending.flag) return;
     _pending.flag = false;
 
+    // Add/update entry in the in-RAM discovered list (for the Web UI).
+    int8_t found = -1;
+    for (uint8_t i = 0; i < _discoveredCount; i++) {
+        if (_discovered[i].type == _pending.type &&
+            macEquals(_discovered[i].mac, _pending.mac)) { found = i; break; }
+    }
+    if (found >= 0) {
+        if (_discovered[found].name[0] == 0 && _pending.name[0]) {
+            strlcpy(_discovered[found].name, _pending.name, sizeof(_discovered[found].name));
+        }
+    } else if (_discoveredCount < MAX_SCAN_RESULTS) {
+        ScanResult &d = _discovered[_discoveredCount++];
+        d.type = _pending.type;
+        d.rssi = 0;
+        strlcpy(d.mac, _pending.mac, sizeof(d.mac));
+        strlcpy(d.name, _pending.name, sizeof(d.name));
+    }
+}
+
+/// Read-only access to the in-RAM discovered list. Used by web_server.cpp
+/// to send the pending_cams/discovered array to the Web UI.
+const ScanResult* camRegistryDiscovered(uint8_t &count) {
+    count = _discoveredCount;
+    return _discovered;
+}
+
+/// Clear the in-RAM discovered list (called when the user starts a new scan).
+void camRegistryClearDiscovered() {
+    _discoveredCount = 0;
+    memset(_discovered, 0, sizeof(_discovered));
+}
+
+/// Explicitly save a discovered camera to NVS. Called when the user clicks
+/// "Pair & Save" in the Web UI. Returns false on full registry or invalid MAC.
+bool camRegistrySave(uint8_t type, const char *mac, const char *name) {
+    if (!mac || !*mac) return false;
+    if (type != CAMERA_DJI && type != CAMERA_GOPRO) return false;
+
     ShutterSettings &s = settingsGet();
 
-    // Dedupe by MAC: refresh name/brand of an existing entry.
-    int8_t found = -1;
+    // Dedup: if this MAC is already saved, just refresh name and return ok.
     for (uint8_t i = 0; i < s.camCount; i++) {
-        if (macEquals(s.cams[i].mac, _pending.mac)) { found = i; break; }
-    }
-
-    bool changed = false;
-    if (found >= 0) {
-        if (strncmp(s.cams[found].name, _pending.name, sizeof(_pending.name)) != 0 ||
-            s.cams[found].type != _pending.type) {
-            s.cams[found].type = _pending.type;
-            strlcpy(s.cams[found].name, _pending.name, sizeof(s.cams[found].name));
-            changed = true;
+        if (macEquals(s.cams[i].mac, mac) && s.cams[i].type == type) {
+            if (name && *name) {
+                strlcpy(s.cams[i].name, name, sizeof(s.cams[i].name));
+                persist();
+            }
+            return true;
         }
-    } else if (s.camCount < MAX_SAVED_CAMERAS) {
-        SavedCamera &c = s.cams[s.camCount];
-        c.type = _pending.type;
-        c.active = false;   // NEVER auto-activate — pairing is user-approved
-        strlcpy(c.mac, _pending.mac, sizeof(c.mac));
-        strlcpy(c.name, _pending.name, sizeof(c.name));
-        s.camCount++;
-        changed = true;
-        DBG("REGISTRY: discovered %s (%s) — tap Use in the UI to pair",
-            _pending.name[0] ? _pending.name : _pending.mac,
-            cameraTypeName((CameraType)_pending.type));
     }
+    if (s.camCount >= MAX_SAVED_CAMERAS) return false;
 
-    // NOTE: deliberately no auto-activation here. New cameras are only ever
-    // paired after the user selects them ("Use") from the Web UI.
-    if (changed) persist();
+    SavedCamera &c = s.cams[s.camCount++];
+    c.type   = type;
+    c.active = false;            // Don't auto-activate; user picks later
+    strlcpy(c.mac,  mac,  sizeof(c.mac));
+    strlcpy(c.name, name && *name ? name : mac, sizeof(c.name));
+    persist();
+    DBG("REGISTRY: saved %s (%s) — user-approved",
+        c.name, c.mac);
+    return true;
 }
 
 bool camRegistryMayAutoConnect(uint8_t type, const char *mac) {

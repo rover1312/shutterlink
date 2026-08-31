@@ -9,7 +9,6 @@
 #include "cam_registry.h"
 #include "scan_results.h"
 #include <NimBLEDevice.h>
-
 // ──────────────────────────────────────────────────────────────────────────────
 // DJI GATT UUIDs
 // ──────────────────────────────────────────────────────────────────────────────
@@ -169,6 +168,7 @@ static void startScan() {
     _doConnect    = false;
 
     scanResultsClear();
+    camRegistryClearDiscovered();   // New scan: wipe in-RAM discovered list
 
     NimBLEScan *pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(&_scanCallbacks, false);

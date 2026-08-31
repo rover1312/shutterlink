@@ -147,10 +147,33 @@ input[type=range]::-moz-range-thumb{width:19px;height:19px;border-radius:50%;bac
 .slotrow select{flex:1;min-width:140px;width:auto}
 .slotrow .pv{width:100%;font-family:var(--mono);font-size:12.5px;color:var(--dim);padding-left:2px}
 .camrow{display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:15px;background:var(--glass2);border:1px solid var(--stroke);margin-bottom:9px}
-.camrow .ci{flex:1;min-width:0}
-.camrow .ci b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.camrow .ci span{font-size:11.5px;color:var(--dim);font-family:var(--mono)}
-.camrow .chip{flex-shrink:0}
+  .camrow .ci{flex:1;min-width:0}
+  .camrow .ci b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .camrow .ci span{font-size:11.5px;color:var(--dim);font-family:var(--mono)}
+  .camrow .chip{flex-shrink:0}
+  /* Active camera card (Card 1) */
+  .active-card{display:flex;align-items:center;gap:14px;padding:16px;border-radius:15px;background:var(--glass2);border:1px solid var(--stroke);margin-bottom:10px}
+  .active-card .ic-lg{width:38px;height:38px;flex-shrink:0;color:var(--accent)}
+  .active-card .ac-info{flex:1;min-width:0}
+  .active-card .ac-info b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .active-card .ac-info span{display:block;font-size:11.5px;color:var(--dim);font-family:var(--mono);margin-top:2px}
+  .active-card .ac-actions{display:flex;gap:8px;flex-shrink:0}
+  /* Discovered (not yet saved) device rows */
+  .discrow{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:13px;background:var(--glass2);border:1px dashed var(--stroke);margin-bottom:7px}
+  .discrow .ci{flex:1;min-width:0}
+  .discrow .ci b{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .discrow .ci span{font-size:11px;color:var(--dim);font-family:var(--mono)}
+  .discrow .rssi-mini{font-family:var(--mono);font-size:11px;color:var(--dim);margin-right:6px}
+  .discrow .rssi-mini.good{color:var(--ok)}
+  .discrow .rssi-mini.mid{color:var(--warn)}
+  .discrow .rssi-mini.bad{color:var(--rec)}
+  .btn.pair-save{background:linear-gradient(135deg,var(--ok),#2bb583);border-color:transparent;color:#fff;padding:7px 13px;font-size:12px;font-weight:700;border-radius:10px;cursor:pointer}
+  .btn.pair-save:hover{transform:translateY(-2px)}
+  .btn.pair-save:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .btn.disconnect{background:transparent;border:1px solid rgba(255,77,103,.45);color:var(--rec);padding:10px 18px;font-size:13px;font-weight:700;border-radius:13px;cursor:pointer}
+  .btn.disconnect:hover{background:rgba(255,77,103,.1)}
+  .spinner-dot{display:inline-block;width:12px;height:12px;border:2px solid var(--stroke);border-top-color:var(--warn);border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
 .btn.mini{padding:8px 15px;font-size:12px;border-radius:11px}
 .xbtn{border:none;background:transparent;color:var(--dim);font-size:17px;line-height:1;cursor:pointer;padding:5px 7px;border-radius:9px;transition:var(--tr)}
 .xbtn:hover{color:var(--rec);background:var(--glass2)}
@@ -333,29 +356,41 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 
 <!-- ============================ CAMERA ============================ -->
 <section id="tab-cam" hidden>
+  <!-- =================== CARD 1: ACTIVE CONNECTION =================== -->
+  <div class="glass card">
+    <h2><svg class="ic"><use href="#i-bt"/></svg>Active connection</h2>
+    <div id="activeCam"></div>
+  </div>
+
+  <!-- =================== CARD 2: SAVED CAMERAS =================== -->
   <div class="glass card">
     <h2><svg class="ic"><use href="#i-cam"/></svg>Saved cameras</h2>
     <div id="camList"></div>
-    <div class="note"><b>Only saved cameras reconnect automatically.</b> New
-      cameras are never paired on their own: discover them below, then tap
-      <b>Use</b> to select one — only then does pairing/connection happen.
-      Selections and the list survive reboots.</div>
   </div>
+
+  <!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
   <div class="glass card">
-    <h2><svg class="ic"><use href="#i-refresh"/></svg>Pair a new camera</h2>
-    <div class="seg">
-      <button id="selDji"><svg class="ic"><use href="#i-aperture"/></svg>DJI Osmo Action</button>
-      <button id="selGp"><svg class="ic"><use href="#i-bt"/></svg>GoPro HERO8+</button>
+    <h2><svg class="ic"><use href="#i-refresh"/></svg>Discover new camera</h2>
+    <div class="seg" id="discoverSeg">
+      <button id="selDji" data-brand="0"><svg class="ic"><use href="#i-aperture"/></svg>DJI Osmo Action</button>
+      <button id="selGp" data-brand="1"><svg class="ic"><use href="#i-bt"/></svg>GoPro HERO8+</button>
     </div>
-    <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn primary" id="pairBtn" disabled>Start pairing</button>
-      <button class="btn danger" id="btnReboot2">Reboot ESP32</button>
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn primary" id="scanBtn" disabled>
+        <svg class="ic" style="vertical-align:middle" id="scanIcon"><use href="#i-refresh"/></svg>
+        <span id="scanBtnTxt">Scan for Cameras</span>
+      </button>
+      <span id="scanCountdown" style="font-size:12px;color:var(--dim)"></span>
     </div>
-    <div class="note"><b>How it works:</b> 1) pick the brand &rarr;
-      2) press <b>Start pairing</b> &rarr; 3) power the camera on nearby &rarr;
-      4) tap <b>Use</b> on it in the list above. Nothing connects until you
-      choose it. First GoPro connection also needs one approval tap on the
-      camera screen; DJI may show an approve prompt too.</div>
+    <div id="scanSpinner" style="display:none;margin-top:10px;align-items:center;gap:8px;color:var(--warn);font-size:12.5px">
+      <span class="spinner-dot"></span><span>Scanning…</span>
+    </div>
+    <div id="discList" style="margin-top:14px"></div>
+    <div class="note"><b>How pairing works:</b> 1) pick the brand &rarr; 2) press
+      <b>Scan for Cameras</b> &rarr; 3) power the camera on nearby &rarr; 4) tap
+      <b>Pair &amp; Save</b> on the device. Nothing connects until you confirm.
+      First GoPro connection needs one approval tap on the camera screen; DJI
+      may show an approve prompt too.</div>
   </div>
 </section>
 
@@ -545,64 +580,247 @@ $('saveSlots').onclick=async()=>{
   }catch(e){console.error('saveSlots error:',e);toast('Error: '+e.message);}
 };
 
-/* ---------- saved-camera list ---------- */
+/* ---------- camera tab: 3 cards (active / saved / discover) ---------- */
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&','<':'<','>':'>','"':'"'}[c]));
+
+function renderActiveCam(){
+  const host=$('activeCam');
+  const c=S.cam||{};
+  const list=S.cams||[];
+  const st=(c.stateName||'OFF');
+  // Find the active saved camera (if any)
+  const active=list.find(x=>x.a);
+
+  if(!active){
+    host.innerHTML='<div class="empty">No camera connected.<br>Select one from your saved devices below, or scan for a new one.</div>';
+    return;
+  }
+
+  let badge;
+  if(st==='READY')badge='<span class="chip ok">READY</span>';
+  else if(st==='SCANNING'||st==='CONNECTING'||st==='PAIRING')
+    badge='<span class="chip warn">'+esc(st)+'</span>';
+  else badge='<span class="chip" style="color:var(--dim)">'+esc(st)+'</span>';
+
+  const ico=active.t?'i-bt':'i-aperture';
+  const brandName=active.t?'GoPro':'DJI Osmo';
+
+  host.innerHTML=
+    '<div class="active-card">'+
+      '<svg class="ic-lg"><use href="#'+ico+'"/></svg>'+
+      '<div class="ac-info">'+
+        '<b>'+esc(active.n||active.m)+'</b>'+
+        '<span>'+esc(active.m)+' \u00b7 '+brandName+'</span>'+
+      '</div>'+
+      '<div class="ac-actions">'+badge+
+        '<button class="btn disconnect" data-disconnect="'+list.indexOf(active)+'">Disconnect</button>'+
+      '</div>'+
+    '</div>';
+}
+
 function renderCams(){
   try{
   const list=S.cams||[];const host=$('camList');
   if(!list.length){
-    host.innerHTML='<div class="empty">No cameras saved yet.<br>'+
-      'Pick a brand below and press <b>Start pairing</b> to discover one.</div>';
+    host.innerHTML='<div class="empty">No saved cameras. Scan for a new device below.</div>';
     return;}
-  const camSt=(S.cam&&S.cam.stateName)||'OFF';
   host.innerHTML=list.map((c,i)=>{
-    let badge;
-    if(c.on)badge='<span class="chip ok">READY</span>';
-    else if(c.a)badge='<span class="chip warn">'+esc(camSt==='SCANNING'?'SCANNING':'CONNECTING')+'</span>';
-    else badge='<span class="chip" style="color:var(--dim)">OFFLINE</span>';
+    const badge=!c.a?'<span class="chip" style="color:var(--dim)">SAVED</span>':'';
     const act=c.a?'<span class="chip" style="color:var(--accent)">ACTIVE</span>'
-                 :'<button class="btn mini" data-use="'+i+'">Use</button>';
+                 :'<button class="btn mini" data-connect="'+i+'">Connect</button>';
     return '<div class="camrow" data-mac="'+esc(c.m)+'" data-type="'+(c.t?1:0)+'">'+
       '<svg class="ic" style="color:'+(c.t?'var(--accent)':'var(--txt)')+'"><use href="#'+(c.t?'i-bt':'i-aperture')+'"/></svg>'+
       '<div class="ci"><b>'+esc(c.n||c.m)+'</b><span>'+esc(c.m)+' \u00b7 '+(c.t?'GoPro':'DJI Osmo')+'</span></div>'+
       badge+act+
-      '<button class="xbtn" data-del="'+i+'" title="Forget camera">&times;</button></div>';
+      '<button class="xbtn" data-forget="'+i+'" title="Forget camera">&times;</button></div>';
   }).join('');
   }catch(e){console.error('renderCams error:',e);}
 }
+
 $('camList').addEventListener('click',async e=>{
   try{
-    const u=e.target.closest('[data-use]');
-    if(u){const j=await api('/api/camera',{select:+u.dataset.use});
+    const c=e.target.closest('[data-connect]');
+    if(c){const j=await api('/api/camera',{select:+c.dataset.connect});
       toast(j.ok?'Selected \u2014 connecting\u2026 approve prompt on camera if shown':'Error: '+(j.error||'?'));poll();return;}
-    const d=e.target.closest('[data-del]');
-    if(d){const j=await api('/api/camera',{remove:+d.dataset.del});
-      toast(j.ok?'Camera forgotten':'Error: '+(j.error||'?'));poll();}
+    const f=e.target.closest('[data-forget]');
+    if(f){if(!confirm('Forget this camera? It will need to be re-paired.'))return;
+      const j=await api('/api/camera',{remove:+f.dataset.forget});
+      toast(j.ok?'Camera forgotten':'Error: '+(j.error||'?'));poll();return;}
+    const d=e.target.closest('[data-disconnect]');
+    if(d){
+      // Disconnect: remove the active camera from the saved list so the loop
+      // doesn't auto-reconnect. The user can re-pair later.
+      if(!confirm('Disconnect and forget this camera?'))return;
+      const j=await api('/api/camera',{remove:+d.dataset.disconnect});
+      toast(j.ok?'Disconnected':'Error: '+(j.error||'?'));poll();return;}
   }catch(e){console.error('camList click error:',e);toast('Error: '+e.message);}
 });
 
-/* ---------- two-step pairing: select brand, then confirm ---------- */
-let pendingBrand=-1;
-function syncPairUI(){
+/* ---------- discover (Card 3): brand pills + scan button + cooldown ---------- */
+let pendingBrand=-1;         // -1 = none, 0 = DJI, 1 = GoPro
+let scanCooldownUntil=0;     // ms timestamp when the scan button re-enables
+let userScanActive=false;    // true ONLY between user click and cooldown end
+let discoveredCams=[];       // last seen discovered list from /api/scan
+let scanResultsActive=false; // mirrors S.scanning for poller use
+let scanPollTimer=null;      // setInterval for /api/scan polling
+let scanCdTimer=null;        // setInterval that ticks the countdown UI
+
+function syncDiscoverUI(){
   try{
     $('selDji').classList.toggle('on',pendingBrand===0);
     $('selGp').classList.toggle('on',pendingBrand===1);
-    const pb=$('pairBtn');
-    pb.disabled=(pendingBrand<0);
-    pb.textContent=pendingBrand<0?'Start pairing'
-      :('Start pairing: scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
-  }catch(e){console.error('syncPairUI error:',e);}
+    const btn=$('scanBtn');
+    const txt=$('scanBtnTxt');
+    const sp=$('scanSpinner');
+    const now=Date.now();
+    const cdLeft=Math.max(0,Math.ceil((scanCooldownUntil-now)/1000));
+
+    // Three explicit UI states — driven ONLY by user action + cooldown,
+    // never by the backend's auto-scan state. This prevents the button
+    // from being stuck on "Scanning…" just because cam_manager is doing
+    // its own background re-scan loop.
+    if(userScanActive && cdLeft>0){
+      // Cooldown is in progress: disable, show countdown, hide spinner.
+      btn.disabled=true;
+      txt.textContent='Scan for Cameras (Ready in '+cdLeft+'s)';
+      sp.style.display='none';
+    }else if(userScanActive && cdLeft<=0){
+      // Cooldown elapsed: re-enable for the next user click.
+      userScanActive=false;
+      btn.disabled=(pendingBrand<0);
+      txt.textContent=pendingBrand<0?'Pick a brand first'
+        :('Scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
+      sp.style.display='none';
+    }else if(pendingBrand<0){
+      // No brand picked yet: disabled with hint.
+      btn.disabled=true;
+      txt.textContent='Pick a brand first';
+      sp.style.display='none';
+    }else{
+      // Ready: enabled, label shows what brand will be scanned.
+      btn.disabled=false;
+      txt.textContent='Scan for '+(pendingBrand?'GoPro':'DJI Osmo');
+      sp.style.display='none';
+    }
+  }catch(e){console.error('syncDiscoverUI error:',e);}
 }
-$('selDji').onclick=()=>{try{pendingBrand=0;syncPairUI();}catch(e){console.error(e);}};
-$('selGp').onclick=()=>{try{pendingBrand=1;syncPairUI();}catch(e){console.error(e);}};
-$('pairBtn').onclick=async()=>{
+
+function renderDiscovered(){
+  const host=$('discList');
+  if(!discoveredCams||!discoveredCams.length){
+    host.innerHTML='<div class="empty">No devices found yet. Press <b>Scan for Cameras</b> above.</div>';
+    return;
+  }
+  // Dedupe by MAC (in case of duplicates)
+  const seen=new Set();
+  const uniq=discoveredCams.filter(r=>{
+    if(seen.has(r.mac))return false;
+    seen.add(r.mac);
+    return true;
+  });
+  // Sort: saved last (they already appear in Card 2)
+  const savedMACS=new Set((S.cams||[]).map(c=>c.m));
+  const newOnes=uniq.filter(r=>!savedMACS.has(r.mac));
+  if(!newOnes.length){
+    host.innerHTML='<div class="empty">No new devices. All found cameras are already saved.</div>';
+    return;
+  }
+  host.innerHTML=newOnes.map(r=>{
+    const rcls=r.rssi>-60?'good':r.rssi>-80?'mid':'bad';
+    const typeLabel=r.t==='GoPro'?'GoPro':'DJI Osmo';
+    const typeIcon=r.t==='GoPro'?'i-bt':'i-aperture';
+    return '<div class="discrow" data-mac="'+esc(r.mac)+'">'+
+      '<svg class="ic" style="color:var(--warn)"><use href="#'+typeIcon+'"/></svg>'+
+      '<div class="ci"><b>'+esc(r.n||r.mac)+'</b>'+
+        '<span>'+esc(r.mac)+' \u00b7 '+typeLabel+'</span></div>'+
+      '<span class="rssi-mini '+rcls+'">'+r.rssi+' dBm</span>'+
+      '<button class="btn pair-save" data-pair="'+esc(r.mac)+'" data-pair-type="'+(r.t==='GoPro'?1:0)+'">Pair &amp; Save</button>'+
+    '</div>';
+  }).join('');
+}
+
+$('discList').addEventListener('click',async e=>{
   try{
-    if(pendingBrand<0)return;
+    const p=e.target.closest('[data-pair]');
+    if(p){
+      const mac=p.dataset.pair;
+      const type=+p.dataset.pairType;
+      p.disabled=true;
+      const j=await api('/api/camera',{pair:{mac:mac,type:type}});
+      if(j.ok){
+        toast('Saved! Connecting\u2026');
+        scanCooldownUntil=Date.now()+10000; // 10s cooldown after a pair
+      }else{
+        toast('Error: '+(j.error||'?'));
+        p.disabled=false;
+      }
+      poll();
+    }
+  }catch(e){console.error('pair click error:',e);toast('Error: '+e.message);}
+});
+
+async function pollDiscovered(){
+  try{
+    const r=await fetch('/api/scan',{cache:'no-store'});
+    if(r.ok){
+      const d=await r.json();
+      discoveredCams=d.results||[];
+      scanResultsActive=!!d.scanning;
+      renderDiscovered();
+    }
+  }catch(e){/* silent — radio contention */}
+}
+function startScanPoll(){
+  if(scanPollTimer)return;
+  pollDiscovered();
+  scanPollTimer=setInterval(pollDiscovered,1500);
+}
+function stopScanPoll(){
+  if(scanPollTimer){clearInterval(scanPollTimer);scanPollTimer=null;}
+}
+
+function startCooldownTicker(){
+  if(scanCdTimer)return;
+  scanCdTimer=setInterval(()=>{
+    syncDiscoverUI();
+    const now=Date.now();
+    // Once the cooldown finishes and the scan poller has wound down,
+    // re-enable the button by clearing userScanActive.
+    if(now>scanCooldownUntil && userScanActive){
+      // Give the poller ~1s extra to grab the last few results, then stop.
+      if(!scanResultsActive){
+        userScanActive=false;
+        stopScanPoll();
+        syncDiscoverUI();
+        clearInterval(scanCdTimer);
+        scanCdTimer=null;
+      }
+    }
+  },500);
+}
+
+$('selDji').onclick=()=>{try{pendingBrand=0;syncDiscoverUI();}catch(e){console.error(e);}};
+$('selGp').onclick=()=>{try{pendingBrand=1;syncDiscoverUI();}catch(e){console.error(e);}};
+
+$('scanBtn').onclick=async()=>{
+  try{
+    if(pendingBrand<0)return toast('Pick a brand first');
+    if(userScanActive)return;  // already in cooldown/scanning
+    // 1) Trigger the backend scan (non-blocking; 5s window).
     const j=await api('/api/settings',{camera:pendingBrand});
-    toast(j.ok?('Scanning for '+(pendingBrand?'GoPro':'DJI Osmo')+
-      '\u2026 tap Use when it appears'):'Error: '+(j.error||'?'));
-    poll();
-  }catch(e){console.error('pairBtn error:',e);toast('Error: '+e.message);}
+    if(!j.ok){toast('Error: '+(j.error||'?'));return;}
+    // 2) Mark the UI as "user is scanning" + start 10s cooldown.
+    userScanActive=true;
+    scanCooldownUntil=Date.now()+10000;
+    // 3) Show the spinner for the first 5s of the cooldown (scan window).
+    $('scanSpinner').style.display='flex';
+    setTimeout(()=>{ $('scanSpinner').style.display='none'; }, 5000);
+    // 4) Start polling /api/scan so Card 3 fills with results.
+    startScanPoll();
+    startCooldownTicker();
+    syncDiscoverUI();
+    toast('Scanning for '+(pendingBrand?'GoPro':'DJI Osmo')+'\u2026');
+  }catch(e){console.error('scanBtn error:',e);toast('Error: '+e.message);}
 };
 $('saveWifi').onclick=async()=>{
   try{
@@ -615,12 +833,12 @@ $('saveWifi').onclick=async()=>{
     else toast('Error: '+(j.error||'?'));
   }catch(e){console.error('saveWifi error:',e);toast('Error: '+e.message);}
 };
-['btnReboot','btnReboot2'].forEach(id=>$(id).onclick=async()=>{
+['btnReboot'].forEach(id=>{const el=$(id);if(el)el.onclick=async()=>{
   try{
     const j=await api('/api/command',{cmd:'reboot'});
     if(j.ok)toast('Rebooting\u2026 reconnect in ~10 s');
   }catch(e){console.error('reboot error:',e);toast('Error: '+e.message);}
-});
+}});
 
 /* ---------- MSP console ---------- */
 $('mspSend').onclick=async()=>{
@@ -747,11 +965,16 @@ async function poll(){
       $('swSod').disabled=!S.roa;
       $('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;
       if(ae!==$('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
-      /* brand pills: show pending choice while choosing, else the active one */
-      if(pendingBrand>=0)syncPairUI();
-      else{$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
-           $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);}
+      // brand pills reflect the live backend brand only when user has NOT
+      // already picked a pending brand.
+      if(pendingBrand<0){
+        $('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+        $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
+      }
+      renderActiveCam();
       renderCams();
+      renderDiscovered();
+      syncDiscoverUI();
       render();
     } else {
       console.debug("Poll skipped: HTTP "+res.status);
