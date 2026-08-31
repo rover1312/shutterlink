@@ -186,6 +186,19 @@ bool camRegistryMayAutoConnect(uint8_t type, const char *mac) {
     return false;
 }
 
+bool camRegistryActiveMac(uint8_t type, char *out, size_t outLen) {
+    if (!out || outLen == 0) return false;
+    out[0] = '\0';
+    ShutterSettings &s = settingsGet();
+    for (uint8_t i = 0; i < s.camCount; i++) {
+        if (s.cams[i].active && s.cams[i].type == type) {
+            strlcpy(out, s.cams[i].mac, outLen);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool camRegistrySelect(uint8_t index) {
     ShutterSettings &s = settingsGet();
     if (index >= s.camCount) return false;

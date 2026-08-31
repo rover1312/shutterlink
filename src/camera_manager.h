@@ -30,12 +30,19 @@ bool camIsReady();
 /// Human-readable name of the active backend ("DJI Osmo" / "GoPro").
 const char* camGetName();
 
-/// Switch camera brand at runtime (disconnects current backend, restarts
-/// scanning with the new one, persists the choice).
+/// Switch camera brand at runtime (disconnects current backend, persists
+/// the choice).  Does NOT start a discovery scan — only changes which
+/// backend is initialised.
 void camSetCamera(CameraType type);
 
 /// Immediately (re)connect to the registry's active saved camera: stops any
 /// scan, points the backend at that MAC and initiates the connection.
 void camKick();
+
+/// User-initiated discovery scan.  Switches the backend to the brand pill
+/// the user picked and calls that backend's startScan() once.  This is the
+/// ONLY entry point for a discovery scan — djiUpdate()/gpUpdate() will
+/// NOT auto-restart the scan after the 5 s window closes.
+void camStartUserScan();
 
 #endif // CAMERA_MANAGER_H

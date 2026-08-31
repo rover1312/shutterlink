@@ -377,7 +377,17 @@ static void handleCommand() {
 static void handleCameraPost() {
     String body = _server.arg("plain");
 
-    if (jsonHas(body, "select")) {
+    if (jsonHas(body, "scan")) {
+        // {"scan": true} — user-initiated discovery scan.
+        // Refuse to start a second scan while one is in progress so the
+        // 5 s window is not split across two competing jobs on the radio.
+        if (scanResultsIsScanning()) {
+            sendJsonError("scan already running");
+            return;
+        }
+        camStartUserScan();
+        _server.send(200, "application/json", "{\"ok\":true}");
+    } else if (jsonHas(body, "select")) {
         long idx = jsonGetNum(body, "select", -1);
         if (idx < 0 || !camRegistrySelect((uint8_t)idx)) {
             sendJsonError("invalid camera index");
@@ -426,7 +436,7 @@ static void handleCameraPost() {
         }
         _server.send(200, "application/json", "{\"ok\":true}");
     } else {
-        sendJsonError("expected select, remove, or pair");
+        sendJsonError("expected scan, select, remove, or pair");
     }
 }
 

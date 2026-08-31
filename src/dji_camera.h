@@ -20,6 +20,11 @@ bool                djiIsReady();
 /// Stop scanning and connect directly to this MAC (user-approved pairing).
 void                djiTargetMac(const char *mac);
 
+/// User-initiated one-shot discovery scan (5 s window).  Called by
+/// camera_manager::camStartUserScan() from the /api/camera {scan:true}
+/// endpoint — NEVER from the background reconnect loop.
+void                djiStartScan();
+
 /// Read-only access to the last connect-attempt error (empty = no error).
 /// Surfaced via /api/status and shown as a toast in the Web UI.
 const char*         djiGetLastError();

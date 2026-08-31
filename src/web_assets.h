@@ -876,16 +876,31 @@ $('scanBtn').onclick=async()=>{
   try{
     if(pendingBrand<0)return toast('Pick a brand first');
     if(userScanActive)return;  // already in cooldown/scanning
-    // 1) Trigger the backend scan (non-blocking; 5s window).
-    const j=await api('/api/settings',{camera:pendingBrand});
-    if(!j.ok){toast('Error: '+(j.error||'?'));return;}
-    // 2) Mark the UI as "user is scanning" + start 10s cooldown.
+    // 1) If the picked brand differs from the active backend, set it
+    //    first (no scan side-effect — this only changes settings.camera).
+    const wantBrand = pendingBrand;
+    const curBrand  = (S&&S.cam)?S.cam.type:settingsGet()?0:0;
+    if (curBrand !== wantBrand){
+      const j = await api('/api/settings',{camera:wantBrand});
+      if(!j.ok){toast('Error: '+(j.error||'?'));return;}
+    }
+    // 2) Clear local list and trigger the actual scan via /api/camera.
+    //    This is the ONLY code path that may start a scan.
+    discoveredCams = [];
+    renderDiscovered();
+    const s = await api('/api/camera',{scan:true});
+    if(!s.ok){
+      // Server-side rejected (already running, etc.) — don't start cooldown.
+      toast('Scan: '+(s.error||'?'));
+      return;
+    }
+    // 3) Mark the UI as "user is scanning" + start 10s cooldown.
     userScanActive=true;
     scanCooldownUntil=Date.now()+10000;
-    // 3) Show the spinner for the first 5s of the cooldown (scan window).
+    // 4) Show the spinner for the first 5s of the cooldown (scan window).
     $('scanSpinner').style.display='flex';
     setTimeout(()=>{ $('scanSpinner').style.display='none'; }, 5000);
-    // 4) Start polling /api/scan so Card 3 fills with results.
+    // 5) Start polling /api/scan so Card 3 fills with results.
     startScanPoll();
     startCooldownTicker();
     syncDiscoverUI();

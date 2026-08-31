@@ -52,4 +52,9 @@ bool camRegistryRemove(uint8_t index);
 /// entry is the active one — i.e. auto-connecting to it is allowed.
 bool camRegistryMayAutoConnect(uint8_t type, const char *mac);
 
+/// Copy the MAC of the active saved camera of this type into `out`.
+/// Returns true on success, false if no active entry of that type exists.
+/// Used by the reconnect loop to skip discovery and target-connect directly.
+bool camRegistryActiveMac(uint8_t type, char *out, size_t outLen);
+
 #endif // CAM_REGISTRY_H

@@ -32,6 +32,12 @@ struct ScanResult {
 /// Initialize the scan results collector.
 void scanResultsInit();
 
+/// Open the collection gate and clear the previous table.
+/// Called by the user-initiated Scan button (and the per-backend
+/// startScan()).  While `_scanning` is true (or `_scanComplete` is true
+/// after the window closes), `scanResultsAdd()` accepts entries.
+void scanResultsStart();
+
 /// Called from BLE scan callbacks to record a discovered device.
 /// @param type Camera type (CAMERA_DJI / CAMERA_GOPRO)
 /// @param mac MAC address string

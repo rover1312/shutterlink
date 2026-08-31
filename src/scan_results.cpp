@@ -65,6 +65,17 @@ void scanResultsInit() {
     memset(_results, 0, sizeof(_results));
 }
 
+void scanResultsStart() {
+    // Wipe the previous table and OPEN the collection gate so the next
+    // scanResultsAdd() call from the NimBLE callback is accepted.  Without
+    // this, _scanning stays false and the gate `if (!_scanning && !
+    // _scanComplete) return;` in scanResultsAdd() drops every advertisement.
+    _count        = 0;
+    _scanning     = true;
+    _scanComplete = false;
+    memset(_results, 0, sizeof(_results));
+}
+
 void scanResultsAdd(uint8_t type, const char *mac, const char *name, int8_t rssi) {
     if (!mac || !*mac) return;
     if (!_scanning && !_scanComplete) return; // Only collect during active scan
