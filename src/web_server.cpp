@@ -21,6 +21,7 @@
 #include "osd_slots.h"
 #include "cam_registry.h"
 #include "msp_protocol.h"
+#include "scan_results.h"
 #include "web_assets.h"
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -427,6 +428,44 @@ static void handleMspPost() {
     _server.send(200, "application/json", out);
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Scan Results Endpoint
+// ──────────────────────────────────────────────────────────────────────────────
+
+static void handleScanResults() {
+    uint8_t count = 0;
+    const ScanResult *results = scanResultsGet(count);
+
+    static char buf[4096];
+    char *p = buf;
+    size_t left = sizeof(buf);
+
+    size_t w = snprintf(p, left, "{\"scanning\":%s,\"results\":[", scanResultsIsScanning() ? "true" : "false");
+    p += w;
+    left -= w;
+
+    for (uint8_t i = 0; i < count; i++) {
+        const ScanResult &r = results[i];
+        const char *typeStr = (r.type == CAMERA_GOPRO) ? "GoPro" : "DJI Osmo";
+
+        w = snprintf(p, left,
+            "%s{\"mac\":\"%s\",\"name\":\"%s\",\"type\":\"%s\",\"rssi\":%d,\"saved\":%s,\"active\":%s}",
+            i ? "," : "",
+            r.mac,
+            r.name[0] ? r.name : "Unknown",
+            typeStr,
+            r.rssi,
+            r.saved ? "true" : "false",
+            r.active ? "true" : "false");
+        p += w;
+        if (w >= left) break;
+        left -= w;
+    }
+
+    snprintf(p, left, "]}");
+    _server.send(200, "application/json", buf);
+}
+
 static void redirectToRoot() {
     _server.sendHeader(String("Location"), String("http://") + _ipStr + "/", true);
     _server.send(302, "text/plain", "");
@@ -511,6 +550,7 @@ void webStart() {
     _server.on("/api/camera",     HTTP_POST, handleCameraPost);
     _server.on("/api/command",    HTTP_POST, handleCommand);
     _server.on("/api/msp",        HTTP_POST, handleMspPost);
+    _server.on("/api/scan",       HTTP_GET,  handleScanResults);
 
     // OS connectivity probes → answer with SUCCESS bodies (see handlers above).
     _server.on("/connecttest.txt",              HTTP_GET, handleProbeConnectTest);

@@ -31,6 +31,7 @@
 
 #include "gopro_camera.h"
 #include "cam_registry.h"
+#include "scan_results.h"
 #include <NimBLEDevice.h>
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -116,19 +117,23 @@ class GpScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
         if (isGoProDevice(advertisedDevice)) {
             std::string macStr = advertisedDevice->getAddress().toString();
             std::string nameStr = advertisedDevice->getName();
+            int8_t rssi = advertisedDevice->getRSSI();
+
+            // Add to scan results for Web UI display
+            scanResultsAdd(CAMERA_GOPRO, macStr.c_str(), nameStr.c_str(), rssi);
 
             // Learning is always allowed; CONNECTING is only permitted for
             // the saved camera currently marked active (user-approved).
             bool mayAuto = camRegistryMayAutoConnect(CAMERA_GOPRO, macStr.c_str());
             camRegistryRemember(CAMERA_GOPRO, macStr.c_str(), nameStr.c_str());
 
-            DBG("GP: seen %s (%s)%s", nameStr.c_str(), macStr.c_str(),
+            DBG("GP: seen %s (%s) RSSI=%d%s", nameStr.c_str(), macStr.c_str(), rssi,
                 mayAuto ? "" : "  [not active — ignoring]");
 
             if (!mayAuto) return;   // Keep scanning, never pair uninvited
 
             DBG("GP: Found active camera: %s (%s) RSSI=%d",
-                nameStr.c_str(), macStr.c_str(), advertisedDevice->getRSSI());
+                nameStr.c_str(), macStr.c_str(), rssi);
 
             NimBLEDevice::getScan()->stop();
             _targetAddress    = advertisedDevice->getAddress();
@@ -167,6 +172,8 @@ static bool isGoProDevice(NimBLEAdvertisedDevice *device) {
 /// duration == 0).
 static void scanCompleteCb(NimBLEScanResults results) {
     DBG("GP: Scan window complete (%d devices)", results.getCount());
+    scanResultsMarkComplete();
+    scanResultsUpdateSavedStatus();
 }
 
 static void startScan() {
@@ -174,6 +181,8 @@ static void startScan() {
     DBG("GP: Scanning for GoPro...");
     _bleState  = BLE_SCANNING;
     _doConnect = false;
+
+    scanResultsClear();
 
     NimBLEScan *pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(&_scanCallbacks, false);

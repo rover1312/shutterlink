@@ -164,7 +164,25 @@ input[type=range]::-moz-range-thumb{width:19px;height:19px;border-radius:50%;bac
   max-width:88vw;text-align:center}
 #toast.show{transform:translateX(-50%) translateY(0)}
 footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
-</style>
+  /* Scan results table */
+  .scan-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .scan-table th,.scan-table td{padding:10px 12px;text-align:left;border-bottom:1px dashed var(--stroke)}
+  .scan-table th{font-weight:700;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+  .scan-table tr:hover{background:var(--glass2)}
+  .scan-table .rssi{font-family:var(--mono);font-size:11.5px}
+  .scan-table .rssi.good{color:var(--ok)}
+  .scan-table .rssi.mid{color:var(--warn)}
+  .scan-table .rssi.bad{color:var(--rec)}
+  .scan-table .type-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700}
+  .scan-table .type-badge.dji{background:rgba(47,111,219,.2);color:var(--accent);border:1px solid var(--accent)}
+  .scan-table .type-badge.gopro{background:rgba(138,90,246,.2);color:#8a5cf6;border:1px solid #8a5cf6}
+  .scan-table .saved-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;color:var(--ok);background:rgba(61,220,151,.15);border:1px solid rgba(61,220,151,.3)}
+  .scan-table .active-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;color:var(--accent);background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.3)}
+  .scan-table .btn.use{background:linear-gradient(135deg,var(--accent),#8a5cf6);border-color:transparent;color:#fff}
+  .scan-table .btn.unpair{background:transparent;color:var(--rec);border-color:rgba(255,77,103,.45)}
+  .scan-table .btn.unpair:hover{background:rgba(255,77,103,.1)}
+  /* Context menu */
+  </style>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute">
@@ -418,27 +436,11 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 'use strict';
 const $=id=>document.getElementById(id);
 let S=null;
-
-/* ---------- theme ---------- */
-function setTheme(t){
-  document.documentElement.dataset.theme=t;
-  try{localStorage.slTheme=t}catch(e){}
-  $('themeIco').querySelector('use').setAttribute('href',t==='dark'?'#i-moon':'#i-sun');
-}
-setTheme((()=>{try{const s=localStorage.slTheme;if(s)return s}catch(e){}
-  return 'light'})());
-$('themeBtn').onclick=()=>
-  setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
-
 /* ---------- tabs ---------- */
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('on',x===b));
   ['dash','ctrl','cam','osd','fc'].forEach(t=>$('tab-'+t).hidden=(t!==b.dataset.tab));
 });
-
-/* ---------- toast ---------- */
-let tt;function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');
-  clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2800);}
 
 /* ---------- build channel select ---------- */
 (()=>{const s=$('selCh');
@@ -454,8 +456,11 @@ let tt;function toast(m){const t=$('toast');t.textContent=m;t.classList.add('sho
     o.value=i;o.textContent=i<4?('CH'+(i+1)):('CH'+(i+1)+' \u00b7 AUX'+(i-3));
     s.appendChild(o);}})();
 $('selWifiCh').onchange=async()=>{
-  const j=await api('/api/settings',{wifiSwitch:+$('selWifiCh').value});
-  toast(j.ok?'Wi-Fi switch saved':'Error: '+(j.error||'?'));};
+  try{
+    const j=await api('/api/settings',{wifiSwitch:+$('selWifiCh').value});
+    toast(j.ok?'Wi-Fi switch saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('selWifiCh error:',e);toast('Error: '+e.message);}
+};
 
 /* ---------- build OSD slot rows ---------- */
 const SLOT_NAMES=['Off','Cam status','Rec time','Battery','Link state','FC battery','Arm state'];
@@ -479,34 +484,59 @@ $('rngDeb').oninput=e=>{fill(e.target);$('lblDeb').textContent=e.target.value+' 
 fill($('rngThr'));fill($('rngDeb'));
 
 /* ---------- API helpers ---------- */
-async function api(url,obj){
+async function api(url,obj,method='POST'){
   try{
-    const r=await fetch(url,{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)});
+    const opts={method,headers:{'Content-Type':'application/json'}};
+    if(obj)opts.body=JSON.stringify(obj);
+    const r=await fetch(url,opts);
+    if(!r.ok){
+      const txt=await r.text().catch(()=>'');
+      return{ok:false,error:'HTTP ' + r.status + ': ' + (txt||r.statusText)};
+    }
     return await r.json();
-  }catch(e){return{ok:false,error:'network error'};}
+  }catch(e){
+    return{ok:false,error:e.name==='TypeError'?'Network error (check connection)':e.message};
+  }
 }
-$('btnStart').onclick=async()=>{const j=await api('/api/command',{cmd:'start'});
-  toast(j.ok?'Record start sent':('Error: '+(j.error||'?')));poll();};
-$('btnStop').onclick=async()=>{const j=await api('/api/command',{cmd:'stop'});
-  toast(j.ok?'Record stop sent':('Error: '+(j.error||'?')));poll();};
+$('btnStart').onclick=async()=>{
+  try{
+    const j=await api('/api/command',{cmd:'start'});
+    toast(j.ok?'Record start sent':('Error: '+(j.error||'?')));poll();
+  }catch(e){console.error('btnStart error:',e);toast('Error: '+e.message);}
+};
+$('btnStop').onclick=async()=>{
+  try{
+    const j=await api('/api/command',{cmd:'stop'});
+    toast(j.ok?'Record stop sent':('Error: '+(j.error||'?')));poll();
+  }catch(e){console.error('btnStop error:',e);toast('Error: '+e.message);}
+};
 
 $('saveCtrl').onclick=async()=>{
-  const j=await api('/api/settings',{auxChannel:+$('selCh').value,
-    threshold:+$('rngThr').value,debounce:+$('rngDeb').value});
-  toast(j.ok?'Switch settings saved':'Error: '+(j.error||'?'));};
+  try{
+    const j=await api('/api/settings',{auxChannel:+$('selCh').value,
+      threshold:+$('rngThr').value,debounce:+$('rngDeb').value});
+    toast(j.ok?'Switch settings saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('saveCtrl error:',e);toast('Error: '+e.message);}
+};
 $('saveBeh').onclick=async()=>{
-  const j=await api('/api/settings',{recordOnArm:$('swRoa').checked,
-    stopOnDisarm:$('swSod').checked});
-  toast(j.ok?'Behaviour saved':'Error: '+(j.error||'?'));};
+  try{
+    const j=await api('/api/settings',{recordOnArm:$('swRoa').checked,
+      stopOnDisarm:$('swSod').checked});
+    toast(j.ok?'Behaviour saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('saveBeh error:',e);toast('Error: '+e.message);}
+};
 $('saveSlots').onclick=async()=>{
-  const body={slot0:+$('sl0').value,slot1:+$('sl1').value,slot2:+$('sl2').value,slot3:+$('sl3').value};
-  const j=await api('/api/settings',body);
-  toast(j.ok?'OSD slots saved':'Error: '+(j.error||'?'));};
+  try{
+    const body={slot0:+$('sl0').value,slot1:+$('sl1').value,slot2:+$('sl2').value,slot3:+$('sl3').value};
+    const j=await api('/api/settings',body);
+    toast(j.ok?'OSD slots saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('saveSlots error:',e);toast('Error: '+e.message);}
+};
 
 /* ---------- saved-camera list ---------- */
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&','<':'<','>':'>','"':'"'}[c]));
 function renderCams(){
+  try{
   const list=S.cams||[];const host=$('camList');
   if(!list.length){
     host.innerHTML='<div class="empty">No cameras saved yet.<br>'+
@@ -520,62 +550,80 @@ function renderCams(){
     else badge='<span class="chip" style="color:var(--dim)">OFFLINE</span>';
     const act=c.a?'<span class="chip" style="color:var(--accent)">ACTIVE</span>'
                  :'<button class="btn mini" data-use="'+i+'">Use</button>';
-    return '<div class="camrow">'+
+    return '<div class="camrow" data-mac="'+esc(c.m)+'" data-type="'+(c.t?1:0)+'">'+
       '<svg class="ic" style="color:'+(c.t?'var(--accent)':'var(--txt)')+'"><use href="#'+(c.t?'i-bt':'i-aperture')+'"/></svg>'+
       '<div class="ci"><b>'+esc(c.n||c.m)+'</b><span>'+esc(c.m)+' \u00b7 '+(c.t?'GoPro':'DJI Osmo')+'</span></div>'+
       badge+act+
       '<button class="xbtn" data-del="'+i+'" title="Forget camera">&times;</button></div>';
   }).join('');
+  }catch(e){console.error('renderCams error:',e);}
 }
 $('camList').addEventListener('click',async e=>{
-  const u=e.target.closest('[data-use]');
-  if(u){const j=await api('/api/camera',{select:+u.dataset.use});
-    toast(j.ok?'Selected \u2014 connecting\u2026 approve prompt on camera if shown':'Error: '+(j.error||'?'));poll();return;}
-  const d=e.target.closest('[data-del]');
-  if(d){const j=await api('/api/camera',{remove:+d.dataset.del});
-    toast(j.ok?'Camera forgotten':'Error: '+(j.error||'?'));poll();}});
+  try{
+    const u=e.target.closest('[data-use]');
+    if(u){const j=await api('/api/camera',{select:+u.dataset.use});
+      toast(j.ok?'Selected \u2014 connecting\u2026 approve prompt on camera if shown':'Error: '+(j.error||'?'));poll();return;}
+    const d=e.target.closest('[data-del]');
+    if(d){const j=await api('/api/camera',{remove:+d.dataset.del});
+      toast(j.ok?'Camera forgotten':'Error: '+(j.error||'?'));poll();}
+  }catch(e){console.error('camList click error:',e);toast('Error: '+e.message);}
+});
 
 /* ---------- two-step pairing: select brand, then confirm ---------- */
 let pendingBrand=-1;
 function syncPairUI(){
-  $('selDji').classList.toggle('on',pendingBrand===0);
-  $('selGp').classList.toggle('on',pendingBrand===1);
-  const pb=$('pairBtn');
-  pb.disabled=(pendingBrand<0);
-  pb.textContent=pendingBrand<0?'Start pairing'
-    :('Start pairing: scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
+  try{
+    $('selDji').classList.toggle('on',pendingBrand===0);
+    $('selGp').classList.toggle('on',pendingBrand===1);
+    const pb=$('pairBtn');
+    pb.disabled=(pendingBrand<0);
+    pb.textContent=pendingBrand<0?'Start pairing'
+      :('Start pairing: scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
+  }catch(e){console.error('syncPairUI error:',e);}
 }
-$('selDji').onclick=()=>{pendingBrand=0;syncPairUI();};
-$('selGp').onclick=()=>{pendingBrand=1;syncPairUI();};
+$('selDji').onclick=()=>{try{pendingBrand=0;syncPairUI();}catch(e){console.error(e);}};
+$('selGp').onclick=()=>{try{pendingBrand=1;syncPairUI();}catch(e){console.error(e);}};
 $('pairBtn').onclick=async()=>{
-  if(pendingBrand<0)return;
-  const j=await api('/api/settings',{camera:pendingBrand});
-  toast(j.ok?('Scanning for '+(pendingBrand?'GoPro':'DJI Osmo')+
-    '\u2026 tap Use when it appears'):'Error: '+(j.error||'?'));
-  poll();};
+  try{
+    if(pendingBrand<0)return;
+    const j=await api('/api/settings',{camera:pendingBrand});
+    toast(j.ok?('Scanning for '+(pendingBrand?'GoPro':'DJI Osmo')+
+      '\u2026 tap Use when it appears'):'Error: '+(j.error||'?'));
+    poll();
+  }catch(e){console.error('pairBtn error:',e);toast('Error: '+e.message);}
+};
 $('saveWifi').onclick=async()=>{
-  const ssid=$('inSsid').value.trim(),pass=$('inPass').value.trim();
-  if(!ssid)return toast('Enter an SSID first');
-  if(pass&&pass.length<8)return toast('Password must be empty or 8+ chars');
-  const body={ssid:ssid};if(pass)body.pass=pass;
-  const j=await api('/api/settings',body);
-  if(j.ok)toast('Wi-Fi saved \u2014 AP restarting, reconnect to "'+ssid+'"');
-  else toast('Error: '+(j.error||'?'));};
+  try{
+    const ssid=$('inSsid').value.trim(),pass=$('inPass').value.trim();
+    if(!ssid)return toast('Enter an SSID first');
+    if(pass&&pass.length<8)return toast('Password must be empty or 8+ chars');
+    const body={ssid:ssid};if(pass)body.pass=pass;
+    const j=await api('/api/settings',body);
+    if(j.ok)toast('Wi-Fi saved \u2014 AP restarting, reconnect to "'+ssid+'"');
+    else toast('Error: '+(j.error||'?'));
+  }catch(e){console.error('saveWifi error:',e);toast('Error: '+e.message);}
+};
 ['btnReboot','btnReboot2'].forEach(id=>$(id).onclick=async()=>{
-  const j=await api('/api/command',{cmd:'reboot'});
-  if(j.ok)toast('Rebooting\u2026 reconnect in ~10 s');});
+  try{
+    const j=await api('/api/command',{cmd:'reboot'});
+    if(j.ok)toast('Rebooting\u2026 reconnect in ~10 s');
+  }catch(e){console.error('reboot error:',e);toast('Error: '+e.message);}
+});
 
 /* ---------- MSP console ---------- */
 $('mspSend').onclick=async()=>{
-  const out=$('mspOut');
-  out.textContent='Querying FC…';
-  const j=await api('/api/msp',{cmd:+$('mspCmd').value});
-  if(!j.ok){out.textContent='Error: '+(j.error||'?');return;}
-  let dump='';
-  for(let i=0;i<j.payload.length;i+=32){
-    const bytes=(j.payload.substr(i,32).match(/../g)||[]).join(' ');
-    dump+='$M> cmd '+String(j.cmd).padStart(3)+'  off '+String(i/2).padStart(3,'0')+'  '+bytes+'\n';}
-  out.textContent='OK \u2014 '+j.len+' payload bytes\n\n'+dump;};
+  try{
+    const out=$('mspOut');
+    out.textContent='Querying FC\u2026';
+    const j=await api('/api/msp',{cmd:+$('mspCmd').value});
+    if(!j.ok){out.textContent='Error: '+(j.error||'?');return;}
+    let dump='';
+    for(let i=0;i<j.payload.length;i+=32){
+      const bytes=(j.payload.substr(i,32).match(/../g)||[]).join(' ');
+      dump+='$M> cmd '+String(j.cmd).padStart(3)+'  off '+String(i/2).padStart(3,'0')+'  '+bytes+'\n';}
+    out.textContent='OK \u2014 '+j.len+' payload bytes\n\n'+dump;
+  }catch(e){console.error('mspSend error:',e);toast('Error: '+e.message);}
+};
 
 /* ---------- render ---------- */
 const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
@@ -584,6 +632,7 @@ function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
 function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
 
 function render(){
+  try{
   if(!S)return;
   const c=S.cam||{},f=S.fc||{},r=S.rec||{},sys=S.sys||{};
   const st=c.stateName||'OFF';
@@ -665,11 +714,15 @@ function render(){
   $('sHeap').textContent=sys.heap?Math.round(sys.heap/1024)+'K':'--';
   $('sUp').textContent=mmss(sys.uptime||0);
   $('sIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
-  $('ftIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';}
+  $('ftIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
+  }catch(e){console.error('Render error:',e);}
+}
 
 /* ---------- poll ---------- */
 async function poll(){
-  try{const r=await fetch('/api/status',{cache:'no-store'});
+  try{
+    const r=await fetch('/api/status',{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP ' + r.status);
     S=await r.json();
     /* sync forms (skip focused elements so typing isn't clobbered) */
     const rec=S.rec||{},ae=document.activeElement;
@@ -688,8 +741,11 @@ async function poll(){
          $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);}
     renderCams();
     render();
-  }catch(e){$('stateTxt').textContent='OFFLINE';
-    $('stateDot').style.background='var(--warn)';}
+  }catch(e){
+    console.error('Poll error:',e);
+    try{$('stateTxt').textContent='OFFLINE';}catch(_){}
+    try{$('stateDot').style.background='var(--warn)';}catch(_){}
+  }
 }
 setInterval(poll,1000);
 poll();
