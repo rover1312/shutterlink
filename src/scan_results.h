@@ -3,6 +3,11 @@
 // ============================================================================
 // Collects all devices seen during BLE scans for display in the Web UI.
 // Keeps track of discovered devices with RSSI, name, type, and saved status.
+//
+// Bounds: MAX_SCAN_RESULTS = 10.  When the table is full, a new device
+// only lands in the table if its RSSI is stronger than the weakest entry
+// (which is then evicted).  Entries older than SCAN_RESULT_TTL_MS are
+// considered stale and are dropped on every add.
 // ============================================================================
 
 #ifndef SCAN_RESULTS_H
@@ -11,7 +16,8 @@
 #include <Arduino.h>
 #include "settings.h"
 
-#define MAX_SCAN_RESULTS 32
+#define MAX_SCAN_RESULTS      10
+#define SCAN_RESULT_TTL_MS    10000UL   // evict entries not seen for >10s
 
 struct ScanResult {
     uint8_t type;               // CameraType (CAMERA_DJI / CAMERA_GOPRO)
@@ -40,6 +46,13 @@ void scanResultsClear();
 /// @param count Output parameter for number of results
 /// @return Pointer to scan results array (valid until next clear)
 const ScanResult* scanResultsGet(uint8_t &count);
+
+/// Get a sorted-by-RSSI-descending snapshot of the scan results.
+/// Writes the sorted indices into `out` (caller-allocated, max `outMax`).
+/// @param out Output array of ScanResult pointers
+/// @param outMax Capacity of `out`
+/// @return Number of entries written
+uint8_t scanResultsGetSortedByRssi(ScanResult const **out, uint8_t outMax);
 
 /// Mark scan as complete (stops updating results).
 void scanResultsMarkComplete();

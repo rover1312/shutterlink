@@ -16,6 +16,8 @@
 #include "config.h"
 #include "settings.h"
 #include "camera_manager.h"
+#include "dji_camera.h"
+#include "gopro_camera.h"
 #include "fc_status.h"
 #include "recorder.h"
 #include "osd_slots.h"
@@ -103,7 +105,7 @@ static void handleRoot() {
 }
 
 static void handleStatus() {
-    static char buf[1700];
+    static char buf[2200];
     char *p = buf;
     size_t left = sizeof(buf);
 
@@ -145,21 +147,41 @@ static void handleStatus() {
     // Pending cams discovered in current scan (drained from BLE host task by
     // loop()). Exposed so the UI can show in-progress discoveries before they
     // land in the persisted registry. Cheap: no allocation, just strlcpy.
-    char pending[256] = "[]";
+    // Sorted by RSSI descending (strongest first) and capped at 10 entries.
+    char pending[640] = "[]";
     {
-        uint8_t pcount = 0;
-        const ScanResult *sr = scanResultsGet(pcount);
+        ScanResult const *sorted[MAX_SCAN_RESULTS];
+        uint8_t n = scanResultsGetSortedByRssi(sorted, MAX_SCAN_RESULTS);
         size_t o = 0;
         o += snprintf(pending + o, sizeof(pending) - o, "[");
-        for (uint8_t i = 0; i < pcount && o < sizeof(pending) - 64; i++) {
-            const char *typeStr = (sr[i].type == CAMERA_GOPRO) ? "GoPro" : "DJI";
+        for (uint8_t i = 0; i < n && o < sizeof(pending) - 80; i++) {
+            const char *typeStr = (sorted[i]->type == CAMERA_GOPRO) ? "GoPro" : "DJI";
+            // Defensive name escape (rare but possible).
+            char safeName[sizeof(sorted[i]->name)];
+            strlcpy(safeName, sorted[i]->name, sizeof(safeName));
+            for (char *q = safeName; *q; q++) {
+                if (*q == '"' || *q == '\\') { memmove(q + 1, q, strlen(q)); *q = ' '; q++; }
+            }
             o += snprintf(pending + o, sizeof(pending) - o,
                 "%s{\"mac\":\"%s\",\"n\":\"%s\",\"t\":\"%s\",\"r\":%d}",
-                i ? "," : "", sr[i].mac,
-                sr[i].name[0] ? sr[i].name : "",
-                typeStr, sr[i].rssi);
+                i ? "," : "", sorted[i]->mac, safeName, typeStr, sorted[i]->rssi);
         }
         if (o < sizeof(pending) - 1) snprintf(pending + o, sizeof(pending) - o, "]");
+    }
+
+    // Last connect-attempt error from the active backend (empty = no error).
+    // The Web UI shows it as a toast and clears the field on next success.
+    const char *lastErr = "";
+    if (cfg.camera == CAMERA_DJI)  lastErr = djiGetLastError();
+    else if (cfg.camera == CAMERA_GOPRO) lastErr = gpGetLastError();
+    char safeErr[64] = "";
+    {
+        size_t i = 0;
+        for (; lastErr[i] && i < sizeof(safeErr) - 1; i++) {
+            char ch = lastErr[i];
+            safeErr[i] = (ch == '"' || ch == '\\') ? ' ' : ch;
+        }
+        safeErr[i] = '\0';
     }
 
     // heap at top level so the UI can show/monitor it. The sys.heap field
@@ -175,7 +197,8 @@ static void handleStatus() {
         "\"auxCh\":%u,\"thr\":%u,\"deb\":%u},"
         "\"slots\":[%d,%d,%d,%d],"
         "\"osd\":[\"%s\",\"%s\",\"%s\",\"%s\"],"
-        "\"wifiSwitch\":%d,\"wifiOn\":%s,"
+        "\"wifiSwitch\":%d,\"wifiOn\":%s,\"scanAll\":%s,"
+        "\"lastError\":\"%s\","
         "\"cams\":%s,\"pending_cams\":%s,\"scanning\":%s,"
         "\"fc\":{\"alive\":%s,\"armed\":%s,\"vbat10\":%u,\"rssi\":%u,"
         "\"cycle\":%u,\"api\":\"%s\",\"fw\":\"%s\",\"board\":\"%s\"},"
@@ -192,6 +215,8 @@ static void handleStatus() {
         osdSlotText(0), osdSlotText(1), osdSlotText(2), osdSlotText(3),
         (cfg.wifiSwitchCh <= 15) ? (int)cfg.wifiSwitchCh : -1,
         _up ? "true" : "false",
+        cfg.scanAll ? "true" : "false",
+        safeErr,
         cams, pending,
         scanResultsIsScanning() ? "true" : "false",
         fc.fcAlive ? "true" : "false", fc.armed ? "true" : "false",
@@ -216,7 +241,8 @@ static void handleSettingsPost() {
 
     if (!jsonHas(body, "camera") && !jsonHas(body, "auxChannel") &&
         !jsonHas(body, "recordOnArm") && !jsonHas(body, "ssid") &&
-        !jsonHas(body, "slots") && !jsonHas(body, "wifiSwitch")) {
+        !jsonHas(body, "slots") && !jsonHas(body, "wifiSwitch") &&
+        !jsonHas(body, "scanAll")) {
         sendJsonError("no recognized keys");
         return;
     }
@@ -259,6 +285,10 @@ static void handleSettingsPost() {
         cfg.recordOnArm = jsonGetBool(body, "recordOnArm");
     if (jsonHas(body, "stopOnDisarm"))
         cfg.stopOnDisarm = jsonGetBool(body, "stopOnDisarm");
+
+    // "Show all nearby devices" toggle (NVS-persisted, no AP restart).
+    if (jsonHas(body, "scanAll"))
+        cfg.scanAll = jsonGetBool(body, "scanAll");
 
     // Wi-Fi radio switch channel (-1 or 255 = disabled)
     if (jsonHas(body, "wifiSwitch")) {

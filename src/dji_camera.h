@@ -20,4 +20,8 @@ bool                djiIsReady();
 /// Stop scanning and connect directly to this MAC (user-approved pairing).
 void                djiTargetMac(const char *mac);
 
+/// Read-only access to the last connect-attempt error (empty = no error).
+/// Surfaced via /api/status and shown as a toast in the Web UI.
+const char*         djiGetLastError();
+
 #endif // DJI_CAMERA_H

@@ -32,6 +32,7 @@
 #include "gopro_camera.h"
 #include "cam_registry.h"
 #include "scan_results.h"
+#include "settings.h"
 #include <NimBLEDevice.h>
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -75,6 +76,10 @@ static bool _registeredStatuses       = false;
 
 // Local rec-time clock: counts while the camera reports encoding.
 static uint32_t _recStartMs           = 0;
+
+// User-facing error from the last connect attempt. Surfaced through
+// /api/status → UI toast. Empty string = no error.
+static char _lastError[48] = "";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Forward declarations
@@ -150,13 +155,24 @@ static GpScanCallbacks _scanCallbacks;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Device identification — GoPros advertise service 0xFEA6 and/or a name like
-// "GoPro 1234" / legacy "GP12345678".
+// "GoPro 1234" / legacy "GP12345678".  When settings.scanAll == true, every
+// advertiser with a valid address is shown so the user can identify their
+// camera manually.
 // ──────────────────────────────────────────────────────────────────────────────
 
 static NimBLEUUID GOPRO_ADV_SERVICE((uint16_t)0xFEA6);
 
 static bool isGoProDevice(NimBLEAdvertisedDevice *device) {
+    // "Show all nearby devices" — accept any advertiser with a valid address.
+    if (settingsGet().scanAll) {
+        std::string addr = device->getAddress().toString();
+        return !addr.empty();
+    }
+
+    // Signal 1: advertised service 0xFEA6 (Open GoPro Control & Query).
     if (device->isAdvertisingService(GOPRO_ADV_SERVICE)) return true;
+
+    // Signal 2: name prefix match.
     if (device->haveName()) {
         std::string name = device->getName();
         if (name.rfind("GoPro", 0) == 0 || name.rfind("GOPRO", 0) == 0 ||
@@ -210,6 +226,7 @@ static bool connectToCamera() {
     if (!_hasTargetAddress) return false;
     DBG("GP: Connecting to %s...", _targetAddress.toString().c_str());
     _bleState = BLE_CONNECTING;
+    _lastError[0] = '\0';   // clear on new attempt
 
     if (!_pClient) {
         _pClient = NimBLEDevice::createClient();
@@ -220,6 +237,7 @@ static bool connectToCamera() {
     if (!_pClient->connect(_targetAddress)) {
         DBG("GP: Connection failed!");
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "connect failed", sizeof(_lastError));
         return false;
     }
 
@@ -229,6 +247,8 @@ static bool connectToCamera() {
         DBG("GP: Service 0xFEA6 not found! Disconnecting.");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        // User-facing: tells the user this is not a GoPro camera.
+        strlcpy(_lastError, "not a GoPro camera", sizeof(_lastError));
         return false;
     }
 
@@ -243,6 +263,7 @@ static bool connectToCamera() {
         DBG("GP: Missing required characteristics!");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "GoPro service missing chars", sizeof(_lastError));
         return false;
     }
 
@@ -511,6 +532,7 @@ bool gpSendStopRecord() {
 BleConnectionState gpGetState() { return _bleState; }
 const CameraTelemetry& gpGetTelemetry() { return _telemetry; }
 bool gpIsReady() { return (_bleState == BLE_CONNECTED); }
+const char* gpGetLastError() { return _lastError; }
 
 void gpTargetMac(const char *mac) {
     if (!mac || !*mac) return;

@@ -174,6 +174,22 @@ input[type=range]::-moz-range-thumb{width:19px;height:19px;border-radius:50%;bac
   .btn.disconnect:hover{background:rgba(255,77,103,.1)}
   .spinner-dot{display:inline-block;width:12px;height:12px;border:2px solid var(--stroke);border-top-color:var(--warn);border-radius:50%;animation:spin 1s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
+  /* "Show all nearby devices" link-like toggle */
+  .link-row{margin-top:10px;text-align:right}
+  a.linklike{color:var(--accent);font-size:12.5px;text-decoration:underline;cursor:pointer;opacity:.85}
+  a.linklike:hover{opacity:1}
+  a.linklike.on{color:var(--rec);font-weight:600}
+  /* RSSI signal-bar (4 bars, top-up) */
+  .rssi-bar{display:inline-flex;align-items:flex-end;gap:1.5px;height:14px;margin-right:4px;vertical-align:middle}
+  .rssi-bar i{display:inline-block;width:3px;background:var(--dim);border-radius:1px;opacity:.35}
+  .rssi-bar i:nth-child(1){height:4px}
+  .rssi-bar i:nth-child(2){height:7px}
+  .rssi-bar i:nth-child(3){height:10px}
+  .rssi-bar i:nth-child(4){height:14px}
+  .rssi-bar.s1 i:nth-child(-n+1){background:var(--rec);opacity:1}
+  .rssi-bar.s2 i:nth-child(-n+2){background:var(--rec);opacity:1}
+  .rssi-bar.s3 i:nth-child(-n+3){background:var(--warn);opacity:1}
+  .rssi-bar.s4 i{background:var(--ok);opacity:1}
 .btn.mini{padding:8px 15px;font-size:12px;border-radius:11px}
 .xbtn{border:none;background:transparent;color:var(--dim);font-size:17px;line-height:1;cursor:pointer;padding:5px 7px;border-radius:9px;transition:var(--tr)}
 .xbtn:hover{color:var(--rec);background:var(--glass2)}
@@ -385,6 +401,15 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div id="scanSpinner" style="display:none;margin-top:10px;align-items:center;gap:8px;color:var(--warn);font-size:12.5px">
       <span class="spinner-dot"></span><span>Scanning…</span>
     </div>
+    <div class="link-row">
+      <a href="#" id="scanAllToggle" class="linklike">Camera not listed? Show all nearby devices</a>
+    </div>
+    <div id="scanAllHint" class="note" style="display:none">
+      <b>Showing every advertiser with a valid address.</b> Hold the camera
+      within 1&nbsp;m — the strongest signal is usually yours. Pick your
+      device and tap <b>Pair &amp; Save</b>; if the connection fails with
+      &ldquo;not a &lt;brand&gt; camera&rdquo; you picked the wrong one.
+    </div>
     <div id="discList" style="margin-top:14px"></div>
     <div class="note"><b>How pairing works:</b> 1) pick the brand &rarr; 2) press
       <b>Scan for Cameras</b> &rarr; 3) power the camera on nearby &rarr; 4) tap
@@ -582,6 +607,7 @@ $('saveSlots').onclick=async()=>{
 
 /* ---------- camera tab: 3 cards (active / saved / discover) ---------- */
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&','<':'<','>':'>','"':'"'}[c]));
+let lastErrorShown='';  // last backend lastError string already toasted
 
 function renderActiveCam(){
   const host=$('activeCam');
@@ -705,6 +731,15 @@ function syncDiscoverUI(){
   }catch(e){console.error('syncDiscoverUI error:',e);}
 }
 
+function rssiBars(r){
+  // 4-bar visual: -50dBm or stronger = 4 bars, -65 = 3, -80 = 2, else 1.
+  let n = 1;
+  if (r >= -50) n = 4;
+  else if (r >= -65) n = 3;
+  else if (r >= -80) n = 2;
+  return '<span class="rssi-bar s'+n+'" title="'+r+' dBm"><i></i><i></i><i></i><i></i></span>';
+}
+
 function renderDiscovered(){
   const host=$('discList');
   if(!discoveredCams||!discoveredCams.length){
@@ -718,7 +753,8 @@ function renderDiscovered(){
     seen.add(r.mac);
     return true;
   });
-  // Sort: saved last (they already appear in Card 2)
+  // Sort: saved last (they already appear in Card 2). The backend already
+  // returns results sorted by RSSI desc; preserve that order here.
   const savedMACS=new Set((S.cams||[]).map(c=>c.m));
   const newOnes=uniq.filter(r=>!savedMACS.has(r.mac));
   if(!newOnes.length){
@@ -726,14 +762,13 @@ function renderDiscovered(){
     return;
   }
   host.innerHTML=newOnes.map(r=>{
-    const rcls=r.rssi>-60?'good':r.rssi>-80?'mid':'bad';
     const typeLabel=r.t==='GoPro'?'GoPro':'DJI Osmo';
     const typeIcon=r.t==='GoPro'?'i-bt':'i-aperture';
     return '<div class="discrow" data-mac="'+esc(r.mac)+'">'+
       '<svg class="ic" style="color:var(--warn)"><use href="#'+typeIcon+'"/></svg>'+
       '<div class="ci"><b>'+esc(r.n||r.mac)+'</b>'+
         '<span>'+esc(r.mac)+' \u00b7 '+typeLabel+'</span></div>'+
-      '<span class="rssi-mini '+rcls+'">'+r.rssi+' dBm</span>'+
+      rssiBars(r.rssi)+
       '<button class="btn pair-save" data-pair="'+esc(r.mac)+'" data-pair-type="'+(r.t==='GoPro'?1:0)+'">Pair &amp; Save</button>'+
     '</div>';
   }).join('');
@@ -801,6 +836,41 @@ function startCooldownTicker(){
 
 $('selDji').onclick=()=>{try{pendingBrand=0;syncDiscoverUI();}catch(e){console.error(e);}};
 $('selGp').onclick=()=>{try{pendingBrand=1;syncDiscoverUI();}catch(e){console.error(e);}};
+
+/* ---------- "Show all nearby devices" toggle ---------- */
+$('scanAllToggle').onclick=async e=>{
+  try{
+    e.preventDefault();
+    const want = !S.scanAll;
+    const j=await api('/api/settings',{scanAll:want});
+    if(!j.ok){toast('Error: '+(j.error||'?'));return;}
+    S.scanAll = want;
+    $('scanAllToggle').classList.toggle('on', want);
+    $('scanAllToggle').textContent = want
+      ? 'Showing all nearby devices — click to filter to known cameras'
+      : 'Camera not listed? Show all nearby devices';
+    $('scanAllHint').style.display = want ? 'block' : 'none';
+    toast(want ? 'Showing every nearby device' : 'Filtered to known cameras');
+    // Trigger a fresh scan so the new mode takes effect immediately.
+    if(!userScanActive && pendingBrand>=0){
+      $('scanBtn').click();
+    } else {
+      poll();
+    }
+  }catch(e){console.error('scanAllToggle error:',e);toast('Error: '+e.message);}
+};
+// Sync the toggle label on initial load and on every poll.
+function syncScanAllToggle(){
+  const want = !!S.scanAll;
+  const link = $('scanAllToggle');
+  if(!link) return;
+  link.classList.toggle('on', want);
+  link.textContent = want
+    ? 'Showing all nearby devices — click to filter to known cameras'
+    : 'Camera not listed? Show all nearby devices';
+  const hint = $('scanAllHint');
+  if(hint) hint.style.display = want ? 'block' : 'none';
+}
 
 $('scanBtn').onclick=async()=>{
   try{
@@ -975,7 +1045,18 @@ async function poll(){
       renderCams();
       renderDiscovered();
       syncDiscoverUI();
+      syncScanAllToggle();
       render();
+      // Surface backend connect-attempt errors as a single toast (only when
+      // they change, so we don't spam on every 1.5s poll).
+      if (S.lastError && S.lastError !== lastErrorShown){
+        lastErrorShown = S.lastError;
+        // Brand-aware message — backend already says "not a DJI Osmo camera"
+        // or "not a GoPro camera". Keep it short and clear.
+        toast(S.lastError);
+      } else if (!S.lastError){
+        lastErrorShown = '';
+      }
     } else {
       console.debug("Poll skipped: HTTP "+res.status);
     }

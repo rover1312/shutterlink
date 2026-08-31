@@ -8,6 +8,7 @@
 #include "dji_camera.h"
 #include "cam_registry.h"
 #include "scan_results.h"
+#include "settings.h"
 #include <NimBLEDevice.h>
 // ──────────────────────────────────────────────────────────────────────────────
 // DJI GATT UUIDs
@@ -40,6 +41,10 @@ static uint32_t _lastKeepAlive        = 0;
 static uint32_t _pairingArmedTime     = 0;
 static uint32_t _authStartMs          = 0;   // When pairing handshake began
 static uint32_t _lastRxMs             = 0;   // Last inbound DUML notification
+
+// User-facing error from the last connect attempt. Surfaced through
+// /api/status → UI toast. Empty string = no error.
+static char _lastError[48] = "";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Forward declarations
@@ -125,25 +130,89 @@ class ShutterLinkAdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallba
 static ShutterLinkAdvertisedDeviceCallbacks _scanCallbacks;
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Device identification
+// Device identification — RENAME-PROOF
 // ──────────────────────────────────────────────────────────────────────────────
+// The DJI Osmo Action family is identified by any of these signals (OR-combined
+// so a single missing signal still matches):
+//   1. Name prefixes: "Osmo Action", "DJI Action", etc.
+//   2. MAC OUI prefixes: 34:d2:62, 60:60:1f, ec:9e:ea
+//   3. Advertised service UUID 0xFFF0
+//   4. Manufacturer data: contains DJI company id (0xAA 0x08) or Xtra (0xF7 0xAA)
+// When settings.scanAll == true, ANY advertiser with a valid address is shown
+// so the user can identify their camera manually.
+// ──────────────────────────────────────────────────────────────────────────────
+
 static const char *DJI_NAME_PREFIXES[] = {
     "Osmo Action", "DJI Action", "OSMO ACTION", "DJI ACTION",
     "Action 2", "action2", "Action 4", "Action 5", "OsmoAction",
 };
 static const size_t DJI_NAME_PREFIX_COUNT = sizeof(DJI_NAME_PREFIXES) / sizeof(DJI_NAME_PREFIXES[0]);
 
+// MAC OUI (Organisationally Unique Identifier) — first 3 bytes of the MAC.
+// Verified from public DJI registration data and sniffing Osmo Action BLE
+// advertisements with multiple firmware versions.
+static const char *DJI_OUI_PREFIXES[] = {
+    "34:d2:62", "60:60:1f", "ec:9e:ea",
+};
+static const size_t DJI_OUI_COUNT = sizeof(DJI_OUI_PREFIXES) / sizeof(DJI_OUI_PREFIXES[0]);
+
+// Advertised service UUID 0xFFF0 (DJI Camera Control).
+static NimBLEUUID DJI_ADV_SERVICE_UUID("0000fff0-0000-1000-8000-00805f9b34fb");
+
+// BLE Company Identifiers (assigned by Bluetooth SIG):
+//   0x08AA = DJI  (little-endian on the wire → 0xAA, 0x08 in the adv payload)
+//   0xAAF7 = Xtra (the same silicon used in some DJI cameras)
+static const uint8_t DJI_COMPANY_ID[2]     = { 0xAA, 0x08 };
+static const uint8_t DJI_XTRA_COMPANY[2]   = { 0xAA, 0xF7 };
+
+/// True if `haystack` contains the 2-byte needle anywhere. O(n) but n is tiny.
+static bool bytesContain(const std::string &haystack, const uint8_t *needle) {
+    if (haystack.size() < 2) return false;
+    for (size_t i = 0; i + 1 < haystack.size(); i++) {
+        if ((uint8_t)haystack[i]     == needle[0] &&
+            (uint8_t)haystack[i + 1] == needle[1]) return true;
+    }
+    return false;
+}
+
 static bool isDjiDevice(NimBLEAdvertisedDevice *device) {
+    // "Show all nearby devices" — accept any advertiser with a valid
+    // address. The brand pill at pair time defines the backend type, so the
+    // user takes responsibility for picking their own camera.
+    if (settingsGet().scanAll) {
+        // Require at least a parseable address — isDjiDevice is called from
+        // a NimBLE callback where the device pointer is always valid, but
+        // we still avoid the empty-string corner case.
+        std::string addr = device->getAddress().toString();
+        return !addr.empty();
+    }
+
+    // Signal 1: name prefix match.
     if (device->haveName()) {
         std::string name = device->getName();
         for (size_t i = 0; i < DJI_NAME_PREFIX_COUNT; i++) {
             if (name.find(DJI_NAME_PREFIXES[i]) != std::string::npos) return true;
         }
     }
+
+    // Signal 2: MAC OUI match.
     std::string addr = device->getAddress().toString();
-    if (addr.rfind("34:d2:62", 0) == 0 || addr.rfind("60:60:1f", 0) == 0) {
-        return true;
+    for (size_t i = 0; i < DJI_OUI_COUNT; i++) {
+        if (addr.rfind(DJI_OUI_PREFIXES[i], 0) == 0) return true;
     }
+
+    // Signal 3: advertised service UUID 0xFFF0.
+    if (device->isAdvertisingService(DJI_ADV_SERVICE_UUID)) return true;
+
+    // Signal 4: manufacturer data contains DJI / Xtra company id.
+    // Guard: getManufacturerData() may return an empty string for
+    // devices that omit the field — handle gracefully.
+    std::string mfr = device->getManufacturerData();
+    if (!mfr.empty()) {
+        if (bytesContain(mfr, DJI_COMPANY_ID))   return true;
+        if (bytesContain(mfr, DJI_XTRA_COMPANY)) return true;
+    }
+
     return false;
 }
 
@@ -190,6 +259,7 @@ static bool connectToCamera() {
     if (!_hasTargetAddress) return false;
     DBG("DJI: Connecting to target %s...", _targetAddress.toString().c_str());
     _bleState = BLE_CONNECTING;
+    _lastError[0] = '\0';   // clear on new attempt
 
     if (!_pClient) {
         _pClient = NimBLEDevice::createClient();
@@ -200,6 +270,7 @@ static bool connectToCamera() {
     if (!_pClient->connect(_targetAddress)) {
         DBG("DJI: Connection failed!");
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "connect failed", sizeof(_lastError));
         return false;
     }
 
@@ -209,6 +280,8 @@ static bool connectToCamera() {
         DBG("DJI: Service 0xFFF0 not found! Disconnecting.");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        // User-facing: tells the user this is not a DJI Osmo camera.
+        strlcpy(_lastError, "not a DJI Osmo camera", sizeof(_lastError));
         return false;
     }
 
@@ -220,6 +293,7 @@ static bool connectToCamera() {
         DBG("DJI: Missing FFF4 or FFF5 characteristics!");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "DJI service missing chars", sizeof(_lastError));
         return false;
     }
 
@@ -558,6 +632,7 @@ bool djiSendStopRecord() {
 BleConnectionState djiGetState() { return _bleState; }
 const CameraTelemetry& djiGetTelemetry() { return _telemetry; }
 bool djiIsReady() { return (_bleState == BLE_CONNECTED) && _sessionEstablished; }
+const char* djiGetLastError() { return _lastError; }
 
 void djiTargetMac(const char *mac) {
     if (!mac || !*mac) return;

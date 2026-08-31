@@ -50,6 +50,14 @@
 // When record-on-arm is active, stop recording when the FC disarms.
 #define DEFAULT_STOP_ON_DISARM    true
 
+// "Show all nearby devices" in the Camera tab.  When false, the BLE
+// discovery filter accepts only known DJI Osmo / GoPro signatures
+// (rename-proof: MAC OUI, advertised service UUID, mfr data).  When true,
+// every advertiser with a valid address is shown so the user can identify
+// their camera manually.  Either way the saved-camera registry is only
+// written when the user explicitly taps "Pair & Save".
+#define DEFAULT_SCAN_ALL          false
+
 // RC channel used as a Wi-Fi on/off switch. 255 = disabled (AP always on).
 #define DEFAULT_WIFI_SWITCH_CH    255
 
