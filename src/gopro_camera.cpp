@@ -31,6 +31,8 @@
 
 #include "gopro_camera.h"
 #include "cam_registry.h"
+#include "scan_results.h"
+#include "settings.h"
 #include <NimBLEDevice.h>
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -75,12 +77,18 @@ static bool _registeredStatuses       = false;
 // Local rec-time clock: counts while the camera reports encoding.
 static uint32_t _recStartMs           = 0;
 
+// User-facing error from the last connect attempt. Surfaced through
+// /api/status → UI toast. Empty string = no error.
+static char _lastError[48] = "";
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Forward declarations
+// Note: gpStartScan() is declared in gopro_camera.h (non-static) so it can
+// be called from camera_manager.cpp via camStartUserScan().
 // ──────────────────────────────────────────────────────────────────────────────
 
-static void startScan();
-static bool connectToCamera();
+void              gpStartScan();
+static bool    connectToCamera();
 static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
                            size_t length, bool isNotify);
 static void parseQueryResponse(const uint8_t *data, size_t len);
@@ -111,25 +119,51 @@ class GpClientCallbacks : public NimBLEClientCallbacks {
 };
 static GpClientCallbacks _clientCallbacks;
 
+// ──────────────────────────────────────────────────────────────────────────────
+// RTOS-SAFE scan callback. Runs on the NimBLE host task — any blocking call
+// (Preferences, Serial.printf, snprintf to a long string) will starve the
+// BLE stack and trip the RTOS watchdog.
+// Rules enforced below:
+//   • NO Preferences/NVS writes (deferred to camRegistryProcess() in loop()).
+//   • NO DBG/Serial output (the snprintf to a 128B buffer can take ms).
+//   • All NimBLE-owned std::strings are COPIED to locals before use — the
+//     temporary returned by getAddress().toString() is destroyed at the
+//     end of the full-expression and the .c_str() pointer would dangle.
+//   • Only lightweight RAM pushes to lock-free pending slots.
+// ──────────────────────────────────────────────────────────────────────────────
 class GpScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice *advertisedDevice) override {
-        if (isGoProDevice(advertisedDevice)) {
-            std::string macStr = advertisedDevice->getAddress().toString();
-            std::string nameStr = advertisedDevice->getName();
+        // Check if device matches our filter OR if "Show All" mode is enabled.
+        bool isMatched = isGoProDevice(advertisedDevice);
+        if (!isMatched && scanResultsIsShowAll()) {
+            // In "Show All" mode, accept any device with a valid address.
+            std::string addr = advertisedDevice->getAddress().toString();
+            isMatched = !addr.empty();
+        }
+        if (!isMatched) return;
 
-            // Learning is always allowed; CONNECTING is only permitted for
-            // the saved camera currently marked active (user-approved).
-            bool mayAuto = camRegistryMayAutoConnect(CAMERA_GOPRO, macStr.c_str());
-            camRegistryRemember(CAMERA_GOPRO, macStr.c_str(), nameStr.c_str());
+        // Copy the address and name into local std::strings.  NimBLE returns
+        // std::string temporaries from getAddress().toString() and
+        // getName() — both are destroyed at end-of-statement, so .c_str()
+        // on the returned temporary would dangle before scanResultsAdd() uses
+        // it.  Keeping the std::strings alive in this scope is safe; they
+        // each hold a small fixed buffer that the heap allocator hands back
+        // when this function returns.
+        std::string macStr  = advertisedDevice->getAddress().toString();
+        std::string nameStr = advertisedDevice->haveName()
+                              ? advertisedDevice->getName() : "";
+        int8_t rssi = advertisedDevice->getRSSI();
 
-            DBG("GP: seen %s (%s)%s", nameStr.c_str(), macStr.c_str(),
-                mayAuto ? "" : "  [not active — ignoring]");
+        // Lock-free RAM push: scan_results module stores it in a static
+        // array with no I/O. NVS write happens later in loop().
+        scanResultsAdd(CAMERA_GOPRO, macStr.c_str(), nameStr.c_str(), rssi, isMatched);
 
-            if (!mayAuto) return;   // Keep scanning, never pair uninvited
+        // Pending registry write: just set a flag + copy into a small
+        // struct. No NVS, no allocation, no std::string persistence.
+        camRegistryRemember(CAMERA_GOPRO, macStr.c_str(), nameStr.c_str());
 
-            DBG("GP: Found active camera: %s (%s) RSSI=%d",
-                nameStr.c_str(), macStr.c_str(), advertisedDevice->getRSSI());
-
+        // Auto-connect check: read-only scan of the saved list.
+        if (camRegistryMayAutoConnect(CAMERA_GOPRO, macStr.c_str())) {
             NimBLEDevice::getScan()->stop();
             _targetAddress    = advertisedDevice->getAddress();
             _hasTargetAddress = true;
@@ -141,13 +175,24 @@ static GpScanCallbacks _scanCallbacks;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Device identification — GoPros advertise service 0xFEA6 and/or a name like
-// "GoPro 1234" / legacy "GP12345678".
+// "GoPro 1234" / legacy "GP12345678".  When settings.scanAll == true, every
+// advertiser with a valid address is shown so the user can identify their
+// camera manually.
 // ──────────────────────────────────────────────────────────────────────────────
 
 static NimBLEUUID GOPRO_ADV_SERVICE((uint16_t)0xFEA6);
 
 static bool isGoProDevice(NimBLEAdvertisedDevice *device) {
+    // "Show all nearby devices" — accept any advertiser with a valid address.
+    if (settingsGet().scanAll) {
+        std::string addr = device->getAddress().toString();
+        return !addr.empty();
+    }
+
+    // Signal 1: advertised service 0xFEA6 (Open GoPro Control & Query).
     if (device->isAdvertisingService(GOPRO_ADV_SERVICE)) return true;
+
+    // Signal 2: name prefix match.
     if (device->haveName()) {
         std::string name = device->getName();
         if (name.rfind("GoPro", 0) == 0 || name.rfind("GOPRO", 0) == 0 ||
@@ -167,22 +212,35 @@ static bool isGoProDevice(NimBLEAdvertisedDevice *device) {
 /// duration == 0).
 static void scanCompleteCb(NimBLEScanResults results) {
     DBG("GP: Scan window complete (%d devices)", results.getCount());
+    scanResultsMarkComplete();
+    scanResultsUpdateSavedStatus();
 }
 
-static void startScan() {
+void gpStartScan() {
     if (_bleState == BLE_SCANNING) return;
-    DBG("GP: Scanning for GoPro...");
+    DBG("GP: Starting 5s scan (40%% duty cycle)...");
     _bleState  = BLE_SCANNING;
     _doConnect = false;
+
+    // Open the collection gate so scanResultsAdd() accepts entries from
+    // the NimBLE callback.  Without this the gate stays closed and the
+    // callback's results are dropped.
+    scanResultsStart();
+    camRegistryClearDiscovered();   // New scan: wipe in-RAM discovered list
 
     NimBLEScan *pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(&_scanCallbacks, false);
     pScan->setActiveScan(true);
+    // ── CRITICAL: 40ms window in 100ms interval = 40% radio duty cycle.
+    //    Leaves 60% airtime for the Wi-Fi SoftAP to keep beaconing.
     pScan->setInterval(100);
-    pScan->setWindow(99);
+    pScan->setWindow(40);
     pScan->setMaxResults(0);
-    // Non-blocking overload (callback variant) — duration 0 = scan forever.
-    pScan->start(0, scanCompleteCb);
+    // ONE-SHOT 5-second window.  gpStartScan() is called ONLY by the
+    // user-initiated Scan button (via camStartUserScan() in camera_manager).
+    // When the window closes, gpUpdate() transitions to BLE_DISCONNECTED
+    // — the firmware NEVER auto-restarts the scan.
+    pScan->start(5, false);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -193,6 +251,7 @@ static bool connectToCamera() {
     if (!_hasTargetAddress) return false;
     DBG("GP: Connecting to %s...", _targetAddress.toString().c_str());
     _bleState = BLE_CONNECTING;
+    _lastError[0] = '\0';   // clear on new attempt
 
     if (!_pClient) {
         _pClient = NimBLEDevice::createClient();
@@ -203,6 +262,7 @@ static bool connectToCamera() {
     if (!_pClient->connect(_targetAddress)) {
         DBG("GP: Connection failed!");
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "connect failed", sizeof(_lastError));
         return false;
     }
 
@@ -212,6 +272,8 @@ static bool connectToCamera() {
         DBG("GP: Service 0xFEA6 not found! Disconnecting.");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        // User-facing: tells the user this is not a GoPro camera.
+        strlcpy(_lastError, "not a GoPro camera", sizeof(_lastError));
         return false;
     }
 
@@ -226,6 +288,7 @@ static bool connectToCamera() {
         DBG("GP: Missing required characteristics!");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "GoPro service missing chars", sizeof(_lastError));
         return false;
     }
 
@@ -426,9 +489,21 @@ void gpUpdate() {
                 _doConnect = false;
                 break;
             }
-            if (now - _lastReconnectAttempt >= BLE_RECONNECT_INTERVAL_MS) {
-                _lastReconnectAttempt = now;
-                startScan();
+            // NO discovery scanning here.  If we have a saved+active camera
+            // of this brand, target-connect to it directly every
+            // BLE_RECONNECT_INTERVAL_MS.  This saves the single 2.4 GHz
+            // radio from having to time-share BLE scanning with the
+            // SoftAP's Wi-Fi beaconing.
+            {
+                char mac[18];
+                if (camRegistryActiveMac(CAMERA_GOPRO, mac, sizeof(mac)) &&
+                    (now - _lastReconnectAttempt) >= BLE_RECONNECT_INTERVAL_MS) {
+                    _lastReconnectAttempt = now;
+                    _targetAddress    = NimBLEAddress(mac);
+                    _hasTargetAddress = true;
+                    DBG("GP: direct reconnect to %s (no scan)", mac);
+                    connectToCamera();
+                }
             }
             break;
 
@@ -436,6 +511,16 @@ void gpUpdate() {
             if (_doConnect) {
                 connectToCamera();
                 _doConnect = false;
+                break;
+            }
+            // ONE-SHOT scan window.  When NimBLE finishes the 5 s window,
+            // isScanning() flips to false.  Transition back to
+            // BLE_DISCONNECTED so the next loop() tick can attempt a
+            // direct reconnect if a saved+active camera exists.  NEVER
+            // call startScan() here — discovery is strictly user-initiated.
+            if (!NimBLEDevice::getScan()->isScanning()) {
+                _bleState = BLE_DISCONNECTED;
+                _lastReconnectAttempt = now;
             }
             break;
 
@@ -486,6 +571,7 @@ bool gpSendStopRecord() {
 BleConnectionState gpGetState() { return _bleState; }
 const CameraTelemetry& gpGetTelemetry() { return _telemetry; }
 bool gpIsReady() { return (_bleState == BLE_CONNECTED); }
+const char* gpGetLastError() { return _lastError; }
 
 void gpTargetMac(const char *mac) {
     if (!mac || !*mac) return;

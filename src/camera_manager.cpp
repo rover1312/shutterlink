@@ -127,3 +127,33 @@ void camKick() {
     if ((CameraType)c.type == CAMERA_GOPRO) gpTargetMac(c.mac);
     else                                    djiTargetMac(c.mac);
 }
+
+// Disconnect current camera and stop BLE operations (for UI disconnect)
+void camDisconnect() {
+    shutdownActiveBackend();
+    
+    // Clear active camera flag in settings
+    ShutterSettings &s = settingsGet();
+    for (uint8_t i = 0; i < s.camCount; i++) {
+        if (s.cams[i].active) {
+            s.cams[i].active = false;
+            break;
+        }
+    }
+    settingsSave();
+    
+    DBG("CAM: disconnected active camera");
+}
+
+// User-initiated one-shot discovery scan.  Called from the /api/camera
+// {scan:true} endpoint — the ONLY code path that may start a discovery
+// scan.  djiUpdate()/gpUpdate() will NOT auto-restart the scan after the
+// 5 s window closes (acceptance criterion D).
+void camStartUserScan() {
+    if (!_stackReady) return;
+    CameraType t = settingsGet().camera;
+    DBG("CAM: user-initiated scan (backend=%s)", cameraTypeName(t));
+
+    if (t == CAMERA_GOPRO) gpStartScan();
+    else                    djiStartScan();
+}

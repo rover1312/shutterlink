@@ -211,6 +211,7 @@ void loop() {
     // 7. Serve the captive portal + REST API.
     camRegistryProcess();   // Flush cameras discovered by BLE scan callbacks
     wifiSwitchUpdate();
+    scanResultsEvictStale();   // Evict stale scan entries (TTL 15s)
     webUpdate();
 
     // 8. Update status LED blink pattern.

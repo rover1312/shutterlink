@@ -66,6 +66,8 @@ struct ShutterSettings {
     uint16_t   debounceMs;          // Switch debounce time
     bool       recordOnArm;         // Start recording when FC arms
     bool       stopOnDisarm;        // Stop recording when FC disarms (needs recordOnArm)
+    bool       scanAll;             // Accept any advertiser during discovery
+                                   // (otherwise filters by MAC OUI / name / mfr)
     char       apSsid[33];          // SoftAP SSID for the Web UI
     char       apPass[65];          // SoftAP password (min 8 chars, or empty = open)
     uint8_t    osdSlot[4];          // OsdSlotContent for Custom Message 1..4

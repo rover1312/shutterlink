@@ -16,11 +16,14 @@
 #include "config.h"
 #include "settings.h"
 #include "camera_manager.h"
+#include "dji_camera.h"
+#include "gopro_camera.h"
 #include "fc_status.h"
 #include "recorder.h"
 #include "osd_slots.h"
 #include "cam_registry.h"
 #include "msp_protocol.h"
+#include "scan_results.h"
 #include "web_assets.h"
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -102,7 +105,7 @@ static void handleRoot() {
 }
 
 static void handleStatus() {
-    static char buf[1700];
+    static char buf[2200];
     char *p = buf;
     size_t left = sizeof(buf);
 
@@ -112,7 +115,7 @@ static void handleStatus() {
 
     BleConnectionState st = camGetState();
     static const char *kStateNames[] =
-        {"OFF", "SCANNING", "CONNECTING", "PAIRING", "READY"};
+        {"OFF", "SCANNING", "CONNECTING", "PAIRING", "CONNECTED"};
 
     int batt = tel.batteryPercent <= 100 ? tel.batteryPercent : -1;
 
@@ -141,19 +144,66 @@ static void handleStatus() {
         o += snprintf(cams + o, sizeof(cams) - o, "]");
     }
 
+    // Pending cams discovered in current scan (drained from BLE host task by
+    // loop()). Exposed so the UI can show in-progress discoveries before they
+    // land in the persisted registry. Cheap: no allocation, just strlcpy.
+    // Sorted by RSSI descending (strongest first) and capped at 10 entries.
+    char pending[640] = "[]";
+    {
+        ScanResult const *sorted[MAX_SCAN_RESULTS];
+        uint8_t n = scanResultsGetSortedByRssi(sorted, MAX_SCAN_RESULTS);
+        size_t o = 0;
+        o += snprintf(pending + o, sizeof(pending) - o, "[");
+        for (uint8_t i = 0; i < n && o < sizeof(pending) - 80; i++) {
+            const char *typeStr = (sorted[i]->type == CAMERA_GOPRO) ? "GoPro" : "DJI";
+            // Defensive name escape (rare but possible).
+            char safeName[sizeof(sorted[i]->name)];
+            strlcpy(safeName, sorted[i]->name, sizeof(safeName));
+            for (char *q = safeName; *q; q++) {
+                if (*q == '"' || *q == '\\') { memmove(q + 1, q, strlen(q)); *q = ' '; q++; }
+            }
+            o += snprintf(pending + o, sizeof(pending) - o,
+                "%s{\"mac\":\"%s\",\"n\":\"%s\",\"t\":\"%s\",\"r\":%d}",
+                i ? "," : "", sorted[i]->mac, safeName, typeStr, sorted[i]->rssi);
+        }
+        if (o < sizeof(pending) - 1) snprintf(pending + o, sizeof(pending) - o, "]");
+    }
+
+    // Last connect-attempt error from the active backend (empty = no error).
+    // The Web UI shows it as a toast and clears the field on next success.
+    const char *lastErr = "";
+    if (cfg.camera == CAMERA_DJI)  lastErr = djiGetLastError();
+    else if (cfg.camera == CAMERA_GOPRO) lastErr = gpGetLastError();
+    char safeErr[64] = "";
+    {
+        size_t i = 0;
+        for (; lastErr[i] && i < sizeof(safeErr) - 1; i++) {
+            char ch = lastErr[i];
+            safeErr[i] = (ch == '"' || ch == '\\') ? ' ' : ch;
+        }
+        safeErr[i] = '\0';
+    }
+
+    // heap at top level so the UI can show/monitor it. The sys.heap field
+    // is kept for backward compatibility.
+    uint32_t heap = ESP.getFreeHeap();
+
     size_t w = snprintf(p, left,
-        "{\"cam\":{\"type\":%d,\"name\":\"%s\",\"state\":%d,"
+        "{\"heap\":%u,"
+        "\"cam\":{\"type\":%d,\"name\":\"%s\",\"state\":%d,"
         "\"stateName\":\"%s\",\"batt\":%d,\"recTime\":%u,\"valid\":%s,"
         "\"model\":\"%s\"},"
         "\"rec\":{\"desired\":%s,\"switchOn\":%s,\"roa\":%s,\"rcValue\":%u,"
         "\"auxCh\":%u,\"thr\":%u,\"deb\":%u},"
         "\"slots\":[%d,%d,%d,%d],"
         "\"osd\":[\"%s\",\"%s\",\"%s\",\"%s\"],"
-        "\"wifiSwitch\":%d,\"wifiOn\":%s,"
-        "\"cams\":%s,"
+        "\"wifiSwitch\":%d,\"wifiOn\":%s,\"scanAll\":%s,"
+        "\"lastError\":\"%s\","
+        "\"cams\":%s,\"pending_cams\":%s,\"scanning\":%s,"
         "\"fc\":{\"alive\":%s,\"armed\":%s,\"vbat10\":%u,\"rssi\":%u,"
         "\"cycle\":%u,\"api\":\"%s\",\"fw\":\"%s\",\"board\":\"%s\"},"
         "\"sys\":{\"heap\":%u,\"uptime\":%lu,\"ip\":\"%s\",\"sta\":%d}}",
+        heap,
         (int)cfg.camera, camGetName(), (int)st, kStateNames[st], batt,
         tel.recTimeSeconds, tel.dataValid ? "true" : "false", tel.model,
         recorderDesiredRecording() ? "true" : "false",
@@ -165,10 +215,14 @@ static void handleStatus() {
         osdSlotText(0), osdSlotText(1), osdSlotText(2), osdSlotText(3),
         (cfg.wifiSwitchCh <= 15) ? (int)cfg.wifiSwitchCh : -1,
         _up ? "true" : "false",
+        cfg.scanAll ? "true" : "false",
+        safeErr,
+        cams, pending,
+        scanResultsIsScanning() ? "true" : "false",
         fc.fcAlive ? "true" : "false", fc.armed ? "true" : "false",
         fc.vbat10, fc.rssi / 10, fc.cycleTimeUs,
         fcApiVersion(), fcFirmwareVersion(), fcBoardName(),
-        ESP.getFreeHeap(), millis() / 1000UL, _ipStr,
+        heap, millis() / 1000UL, _ipStr,
         WiFi.softAPgetStationNum());
     (void)w;  // Truncation would only clip trailing '}' — buffer sized with headroom
 
@@ -187,7 +241,8 @@ static void handleSettingsPost() {
 
     if (!jsonHas(body, "camera") && !jsonHas(body, "auxChannel") &&
         !jsonHas(body, "recordOnArm") && !jsonHas(body, "ssid") &&
-        !jsonHas(body, "slots") && !jsonHas(body, "wifiSwitch")) {
+        !jsonHas(body, "slots") && !jsonHas(body, "wifiSwitch") &&
+        !jsonHas(body, "scanAll")) {
         sendJsonError("no recognized keys");
         return;
     }
@@ -230,6 +285,10 @@ static void handleSettingsPost() {
         cfg.recordOnArm = jsonGetBool(body, "recordOnArm");
     if (jsonHas(body, "stopOnDisarm"))
         cfg.stopOnDisarm = jsonGetBool(body, "stopOnDisarm");
+
+    // "Show all nearby devices" toggle (NVS-persisted, no AP restart).
+    if (jsonHas(body, "scanAll"))
+        cfg.scanAll = jsonGetBool(body, "scanAll");
 
     // Wi-Fi radio switch channel (-1 or 255 = disabled)
     if (jsonHas(body, "wifiSwitch")) {
@@ -318,7 +377,19 @@ static void handleCommand() {
 static void handleCameraPost() {
     String body = _server.arg("plain");
 
-    if (jsonHas(body, "select")) {
+    if (jsonHas(body, "scan")) {
+        // {"scan": true} — user-initiated discovery scan.
+        // Refuse to start a second scan while one is in progress so the
+        // 5 s window is not split across two competing jobs on the radio.
+        if (scanResultsIsScanning()) {
+            // Graceful degradation: tell the UI we are already scanning,
+            // don't throw 400.
+            _server.send(200, "application/json", "{\"ok\":true,\"already\":true}");
+            return;
+        }
+        camStartUserScan();
+        _server.send(200, "application/json", "{\"ok\":true}");
+    } else if (jsonHas(body, "select")) {
         long idx = jsonGetNum(body, "select", -1);
         if (idx < 0 || !camRegistrySelect((uint8_t)idx)) {
             sendJsonError("invalid camera index");
@@ -332,9 +403,51 @@ static void handleCameraPost() {
             sendJsonError("invalid camera index");
             return;
         }
+        // Also disconnect BLE if removing the active camera
+        camDisconnect();
+        _server.send(200, "application/json", "{\"ok\":true}");
+    } else if (jsonHas(body, "pair")) {
+        // "pair" body: {"mac":"AA:BB:...","type":0|1}
+        String mac = jsonGetStr(body, "mac");
+        long type = jsonGetNum(body, "type", -1);
+        if (!mac.length() || (type != CAMERA_DJI && type != CAMERA_GOPRO)) {
+            sendJsonError("pair: mac and type required");
+            return;
+        }
+        // Check if device is currently visible in scan results (online check)
+        uint8_t dcount = 0;
+        const ScanResult *dr = camRegistryDiscovered(dcount);
+        bool isOnline = false;
+        char nameBuf[24] = "";
+        for (uint8_t i = 0; i < dcount; i++) {
+            if (strcasecmp(dr[i].mac, mac.c_str()) == 0 && dr[i].type == (uint8_t)type) {
+                isOnline = true;
+                strlcpy(nameBuf, dr[i].name, sizeof(nameBuf));
+                break;
+            }
+        }
+        // Don't allow pairing with offline devices
+        if (!isOnline) {
+            sendJsonError("Cannot pair: device is offline or not in range");
+            return;
+        }
+        if (!camRegistrySave((uint8_t)type, mac.c_str(),
+                              nameBuf[0] ? nameBuf : mac.c_str())) {
+            sendJsonError("pair: registry full or invalid");
+            return;
+        }
+        // Find the newly-saved entry's index and select+kick it.
+        for (uint8_t i = 0; i < settingsGet().camCount; i++) {
+            if (strcasecmp(settingsGet().cams[i].mac, mac.c_str()) == 0 &&
+                settingsGet().cams[i].type == (uint8_t)type) {
+                camRegistrySelect(i);
+                camKick();
+                break;
+            }
+        }
         _server.send(200, "application/json", "{\"ok\":true}");
     } else {
-        sendJsonError("expected select or remove");
+        sendJsonError("expected scan, select, remove, or pair");
     }
 }
 
@@ -427,6 +540,41 @@ static void handleMspPost() {
     _server.send(200, "application/json", out);
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Scan Results Endpoint
+// ──────────────────────────────────────────────────────────────────────────────
+
+static void handleScanResults() {
+    uint8_t dcount = 0;
+    const ScanResult *dr = camRegistryDiscovered(dcount);
+
+    static char buf[4096];
+    char *p = buf;
+    size_t left = sizeof(buf);
+
+    size_t w = snprintf(p, left, "{\"scanning\":%s,\"results\":[",
+                        scanResultsIsScanning() ? "true" : "false");
+    p += w;
+    left -= w;
+
+    for (uint8_t i = 0; i < dcount; i++) {
+        const char *typeStr = (dr[i].type == CAMERA_GOPRO) ? "GoPro" : "DJI Osmo";
+        w = snprintf(p, left,
+            "%s{\"mac\":\"%s\",\"name\":\"%s\",\"t\":\"%s\",\"r\":%d}",
+            i ? "," : "",
+            dr[i].mac,
+            dr[i].name[0] ? dr[i].name : "",
+            typeStr,
+            dr[i].rssi);
+        p += w;
+        if (w >= left) break;
+        left -= w;
+    }
+
+    snprintf(p, left, "]}");
+    _server.send(200, "application/json", buf);
+}
+
 static void redirectToRoot() {
     _server.sendHeader(String("Location"), String("http://") + _ipStr + "/", true);
     _server.send(302, "text/plain", "");
@@ -511,6 +659,7 @@ void webStart() {
     _server.on("/api/camera",     HTTP_POST, handleCameraPost);
     _server.on("/api/command",    HTTP_POST, handleCommand);
     _server.on("/api/msp",        HTTP_POST, handleMspPost);
+    _server.on("/api/scan",       HTTP_GET,  handleScanResults);
 
     // OS connectivity probes → answer with SUCCESS bodies (see handlers above).
     _server.on("/connecttest.txt",              HTTP_GET, handleProbeConnectTest);

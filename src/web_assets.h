@@ -147,10 +147,49 @@ input[type=range]::-moz-range-thumb{width:19px;height:19px;border-radius:50%;bac
 .slotrow select{flex:1;min-width:140px;width:auto}
 .slotrow .pv{width:100%;font-family:var(--mono);font-size:12.5px;color:var(--dim);padding-left:2px}
 .camrow{display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:15px;background:var(--glass2);border:1px solid var(--stroke);margin-bottom:9px}
-.camrow .ci{flex:1;min-width:0}
-.camrow .ci b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.camrow .ci span{font-size:11.5px;color:var(--dim);font-family:var(--mono)}
-.camrow .chip{flex-shrink:0}
+  .camrow .ci{flex:1;min-width:0}
+  .camrow .ci b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .camrow .ci span{font-size:11.5px;color:var(--dim);font-family:var(--mono)}
+  .camrow .chip{flex-shrink:0}
+  /* Active camera card (Card 1) */
+  .active-card{display:flex;align-items:center;gap:14px;padding:16px;border-radius:15px;background:var(--glass2);border:1px solid var(--stroke);margin-bottom:10px}
+  .active-card .ic-lg{width:38px;height:38px;flex-shrink:0;color:var(--accent)}
+  .active-card .ac-info{flex:1;min-width:0}
+  .active-card .ac-info b{display:block;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .active-card .ac-info span{display:block;font-size:11.5px;color:var(--dim);font-family:var(--mono);margin-top:2px}
+  .active-card .ac-actions{display:flex;gap:8px;flex-shrink:0}
+  /* Discovered (not yet saved) device rows */
+  .discrow{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:13px;background:var(--glass2);border:1px dashed var(--stroke);margin-bottom:7px}
+  .discrow .ci{flex:1;min-width:0}
+  .discrow .ci b{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .discrow .ci span{font-size:11px;color:var(--dim);font-family:var(--mono)}
+  .discrow .rssi-mini{font-family:var(--mono);font-size:11px;color:var(--dim);margin-right:6px}
+  .discrow .rssi-mini.good{color:var(--ok)}
+  .discrow .rssi-mini.mid{color:var(--warn)}
+  .discrow .rssi-mini.bad{color:var(--rec)}
+  .btn.pair-save{background:linear-gradient(135deg,var(--ok),#2bb583);border-color:transparent;color:#fff;padding:7px 13px;font-size:12px;font-weight:700;border-radius:10px;cursor:pointer}
+  .btn.pair-save:hover{transform:translateY(-2px)}
+  .btn.pair-save:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .btn.disconnect{background:transparent;border:1px solid rgba(255,77,103,.45);color:var(--rec);padding:10px 18px;font-size:13px;font-weight:700;border-radius:13px;cursor:pointer}
+  .btn.disconnect:hover{background:rgba(255,77,103,.1)}
+  .spinner-dot{display:inline-block;width:12px;height:12px;border:2px solid var(--stroke);border-top-color:var(--warn);border-radius:50%;animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* "Show all nearby devices" link-like toggle */
+  .link-row{margin-top:10px;text-align:right}
+  a.linklike{color:var(--accent);font-size:12.5px;text-decoration:underline;cursor:pointer;opacity:.85}
+  a.linklike:hover{opacity:1}
+  a.linklike.on{color:var(--rec);font-weight:600}
+  /* RSSI signal-bar (4 bars, top-up) */
+  .rssi-bar{display:inline-flex;align-items:flex-end;gap:1.5px;height:14px;margin-right:4px;vertical-align:middle}
+  .rssi-bar i{display:inline-block;width:3px;background:var(--dim);border-radius:1px;opacity:.35}
+  .rssi-bar i:nth-child(1){height:4px}
+  .rssi-bar i:nth-child(2){height:7px}
+  .rssi-bar i:nth-child(3){height:10px}
+  .rssi-bar i:nth-child(4){height:14px}
+  .rssi-bar.s1 i:nth-child(-n+1){background:var(--rec);opacity:1}
+  .rssi-bar.s2 i:nth-child(-n+2){background:var(--rec);opacity:1}
+  .rssi-bar.s3 i:nth-child(-n+3){background:var(--warn);opacity:1}
+  .rssi-bar.s4 i{background:var(--ok);opacity:1}
 .btn.mini{padding:8px 15px;font-size:12px;border-radius:11px}
 .xbtn{border:none;background:transparent;color:var(--dim);font-size:17px;line-height:1;cursor:pointer;padding:5px 7px;border-radius:9px;transition:var(--tr)}
 .xbtn:hover{color:var(--rec);background:var(--glass2)}
@@ -164,7 +203,25 @@ input[type=range]::-moz-range-thumb{width:19px;height:19px;border-radius:50%;bac
   max-width:88vw;text-align:center}
 #toast.show{transform:translateX(-50%) translateY(0)}
 footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
-</style>
+  /* Scan results table */
+  .scan-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .scan-table th,.scan-table td{padding:10px 12px;text-align:left;border-bottom:1px dashed var(--stroke)}
+  .scan-table th{font-weight:700;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+  .scan-table tr:hover{background:var(--glass2)}
+  .scan-table .rssi{font-family:var(--mono);font-size:11.5px}
+  .scan-table .rssi.good{color:var(--ok)}
+  .scan-table .rssi.mid{color:var(--warn)}
+  .scan-table .rssi.bad{color:var(--rec)}
+  .scan-table .type-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700}
+  .scan-table .type-badge.dji{background:rgba(47,111,219,.2);color:var(--accent);border:1px solid var(--accent)}
+  .scan-table .type-badge.gopro{background:rgba(138,90,246,.2);color:#8a5cf6;border:1px solid #8a5cf6}
+  .scan-table .saved-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;color:var(--ok);background:rgba(61,220,151,.15);border:1px solid rgba(61,220,151,.3)}
+  .scan-table .active-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:700;color:var(--accent);background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.3)}
+  .scan-table .btn.use{background:linear-gradient(135deg,var(--accent),#8a5cf6);border-color:transparent;color:#fff}
+  .scan-table .btn.unpair{background:transparent;color:var(--rec);border-color:rgba(255,77,103,.45)}
+  .scan-table .btn.unpair:hover{background:rgba(255,77,103,.1)}
+  /* Context menu */
+  </style>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute">
@@ -315,29 +372,50 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 
 <!-- ============================ CAMERA ============================ -->
 <section id="tab-cam" hidden>
+  <!-- =================== CARD 1: ACTIVE CONNECTION =================== -->
+  <div class="glass card">
+    <h2><svg class="ic"><use href="#i-bt"/></svg>Active connection</h2>
+    <div id="activeCam"></div>
+  </div>
+
+  <!-- =================== CARD 2: SAVED CAMERAS =================== -->
   <div class="glass card">
     <h2><svg class="ic"><use href="#i-cam"/></svg>Saved cameras</h2>
     <div id="camList"></div>
-    <div class="note"><b>Only saved cameras reconnect automatically.</b> New
-      cameras are never paired on their own: discover them below, then tap
-      <b>Use</b> to select one — only then does pairing/connection happen.
-      Selections and the list survive reboots.</div>
   </div>
+
+<!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
   <div class="glass card">
-    <h2><svg class="ic"><use href="#i-refresh"/></svg>Pair a new camera</h2>
-    <div class="seg">
-      <button id="selDji"><svg class="ic"><use href="#i-aperture"/></svg>DJI Osmo Action</button>
-      <button id="selGp"><svg class="ic"><use href="#i-bt"/></svg>GoPro HERO8+</button>
+    <h2><svg class="ic"><use href="#i-refresh"/></svg>Discover new camera</h2>
+    <div class="seg" id="discoverSeg">
+      <button id="selDji" data-brand="0"><svg class="ic"><use href="#i-aperture"/></svg>DJI Osmo Action</button>
+      <button id="selGp" data-brand="1"><svg class="ic"><use href="#i-bt"/></svg>GoPro HERO8+</button>
     </div>
-    <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn primary" id="pairBtn" disabled>Start pairing</button>
-      <button class="btn danger" id="btnReboot2">Reboot ESP32</button>
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn primary" id="scanBtn" disabled>
+        <svg class="ic" style="vertical-align:middle" id="scanIcon"><use href="#i-refresh"/></svg>
+        <span id="scanBtnTxt">Pick a brand first</span>
+      </button>
+      <span id="scanCountdown" style="font-size:12px;color:var(--dim)"></span>
     </div>
-    <div class="note"><b>How it works:</b> 1) pick the brand &rarr;
-      2) press <b>Start pairing</b> &rarr; 3) power the camera on nearby &rarr;
-      4) tap <b>Use</b> on it in the list above. Nothing connects until you
-      choose it. First GoPro connection also needs one approval tap on the
-      camera screen; DJI may show an approve prompt too.</div>
+    <div id="scanSpinner" style="display:none;margin-top:10px;align-items:center;gap:8px;color:var(--warn);font-size:12.5px">
+      <span class="spinner-dot"></span><span>Scanning…</span>
+    </div>
+    <div class="link-row">
+      <a href="#" id="scanAllToggle" class="linklike">Camera not listed? Show all nearby devices</a>
+    </div>
+    <div id="scanAllHint" class="note" style="display:none">
+      <b>Showing every advertiser with a valid address.</b> Hold the camera
+      within 1&nbsp;m — the strongest signal is usually yours. Pick your
+      device and tap <b>Pair & Save</b>; if the connection fails with
+      &ldquo;not a <brand> camera&rdquo; you picked the wrong one.
+    </div>
+    <div id="discList" style="margin-top:14px"></div>
+    <div class="note"><b>How pairing works:</b> 1) pick the brand &rarr; 2) press
+      <b>Scan for Cameras</b> &rarr; 3) power the camera on nearby &rarr; 4) tap
+      <b>Pair & Save</b> on the device. Nothing connects until you confirm.
+      First GoPro connection needs one approval tap on the camera screen; DJI
+      may show an approve prompt too.</div>
   </div>
 </section>
 
@@ -415,30 +493,26 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 
 <div id="toast" class="glass"></div>
 <script>
+/* ---------- Toast polyfill (Captive Portal has no internet; CDN libs unavailable) ---------- */
+if (typeof toast !== 'function') {
+    window.toast = function(msg, type="info") {
+        console.log("[Toast "+type+"]", msg);
+        let el = document.createElement('div');
+        el.innerText = msg;
+        el.style.cssText = "position:fixed;bottom:20px;right:20px;background:rgba(15,23,42,0.9);color:white;padding:12px 24px;border-radius:12px;z-index:9999;font-family:sans-serif;box-shadow:0 8px 16px rgba(0,0,0,0.3);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.1);transition:opacity 0.4s, transform 0.4s;transform:translateY(20px);opacity:0;";
+        document.body.appendChild(el);
+        setTimeout(function() { el.style.opacity = '1'; el.style.transform = 'translateY(0)'; }, 10);
+        setTimeout(function() { el.style.opacity = '0'; el.style.transform = 'translateY(20px)'; setTimeout(function() { el.remove(); }, 400); }, 3000);
+    };
+}
 'use strict';
 const $=id=>document.getElementById(id);
 let S=null;
-
-/* ---------- theme ---------- */
-function setTheme(t){
-  document.documentElement.dataset.theme=t;
-  try{localStorage.slTheme=t}catch(e){}
-  $('themeIco').querySelector('use').setAttribute('href',t==='dark'?'#i-moon':'#i-sun');
-}
-setTheme((()=>{try{const s=localStorage.slTheme;if(s)return s}catch(e){}
-  return 'light'})());
-$('themeBtn').onclick=()=>
-  setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');
-
 /* ---------- tabs ---------- */
 document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('on',x===b));
   ['dash','ctrl','cam','osd','fc'].forEach(t=>$('tab-'+t).hidden=(t!==b.dataset.tab));
 });
-
-/* ---------- toast ---------- */
-let tt;function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');
-  clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2800);}
 
 /* ---------- build channel select ---------- */
 (()=>{const s=$('selCh');
@@ -454,8 +528,11 @@ let tt;function toast(m){const t=$('toast');t.textContent=m;t.classList.add('sho
     o.value=i;o.textContent=i<4?('CH'+(i+1)):('CH'+(i+1)+' \u00b7 AUX'+(i-3));
     s.appendChild(o);}})();
 $('selWifiCh').onchange=async()=>{
-  const j=await api('/api/settings',{wifiSwitch:+$('selWifiCh').value});
-  toast(j.ok?'Wi-Fi switch saved':'Error: '+(j.error||'?'));};
+  try{
+    const j=await api('/api/settings',{wifiSwitch:+$('selWifiCh').value});
+    toast(j.ok?'Wi-Fi switch saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('selWifiCh error:',e);toast('Error: '+e.message);}
+};
 
 /* ---------- build OSD slot rows ---------- */
 const SLOT_NAMES=['Off','Cam status','Rec time','Battery','Link state','FC battery','Arm state'];
@@ -479,103 +556,420 @@ $('rngDeb').oninput=e=>{fill(e.target);$('lblDeb').textContent=e.target.value+' 
 fill($('rngThr'));fill($('rngDeb'));
 
 /* ---------- API helpers ---------- */
-async function api(url,obj){
+async function api(url,obj,method='POST'){
   try{
-    const r=await fetch(url,{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)});
+    const opts={method,headers:{'Content-Type':'application/json'}};
+    if(obj)opts.body=JSON.stringify(obj);
+    const r=await fetch(url,opts);
+    if(!r.ok){
+      const txt=await r.text().catch(()=>'');
+      return{ok:false,error:'HTTP ' + r.status + ': ' + (txt||r.statusText)};
+    }
     return await r.json();
-  }catch(e){return{ok:false,error:'network error'};}
+  }catch(e){
+    return{ok:false,error:e.name==='TypeError'?'Network error (check connection)':e.message};
+  }
 }
-$('btnStart').onclick=async()=>{const j=await api('/api/command',{cmd:'start'});
-  toast(j.ok?'Record start sent':('Error: '+(j.error||'?')));poll();};
-$('btnStop').onclick=async()=>{const j=await api('/api/command',{cmd:'stop'});
-  toast(j.ok?'Record stop sent':('Error: '+(j.error||'?')));poll();};
+$('btnStart').onclick=async()=>{
+  try{
+    const j=await api('/api/command',{cmd:'start'});
+    toast(j.ok?'Record start sent':('Error: '+(j.error||'?')));poll();
+  }catch(e){console.error('btnStart error:',e);toast('Error: '+e.message);}
+};
+$('btnStop').onclick=async()=>{
+  try{
+    const j=await api('/api/command',{cmd:'stop'});
+    toast(j.ok?'Record stop sent':('Error: '+(j.error||'?')));poll();
+  }catch(e){console.error('btnStop error:',e);toast('Error: '+e.message);}
+};
 
 $('saveCtrl').onclick=async()=>{
-  const j=await api('/api/settings',{auxChannel:+$('selCh').value,
-    threshold:+$('rngThr').value,debounce:+$('rngDeb').value});
-  toast(j.ok?'Switch settings saved':'Error: '+(j.error||'?'));};
+  try{
+    const j=await api('/api/settings',{auxChannel:+$('selCh').value,
+      threshold:+$('rngThr').value,debounce:+$('rngDeb').value});
+    toast(j.ok?'Switch settings saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('saveCtrl error:',e);toast('Error: '+e.message);}
+};
 $('saveBeh').onclick=async()=>{
-  const j=await api('/api/settings',{recordOnArm:$('swRoa').checked,
-    stopOnDisarm:$('swSod').checked});
-  toast(j.ok?'Behaviour saved':'Error: '+(j.error||'?'));};
+  try{
+    const j=await api('/api/settings',{recordOnArm:$('swRoa').checked,
+      stopOnDisarm:$('swSod').checked});
+    toast(j.ok?'Behaviour saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('saveBeh error:',e);toast('Error: '+e.message);}
+};
 $('saveSlots').onclick=async()=>{
-  const body={slot0:+$('sl0').value,slot1:+$('sl1').value,slot2:+$('sl2').value,slot3:+$('sl3').value};
-  const j=await api('/api/settings',body);
-  toast(j.ok?'OSD slots saved':'Error: '+(j.error||'?'));};
+  try{
+    const body={slot0:+$('sl0').value,slot1:+$('sl1').value,slot2:+$('sl2').value,slot3:+$('sl3').value};
+    const j=await api('/api/settings',body);
+    toast(j.ok?'OSD slots saved':'Error: '+(j.error||'?'));
+  }catch(e){console.error('saveSlots error:',e);toast('Error: '+e.message);}
+};
 
-/* ---------- saved-camera list ---------- */
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+/* ---------- camera tab: 3 cards (active / saved / discover) ---------- */
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&','<':'<','>':'>','"':'"'}[c]));
+let lastErrorShown='';  // last backend lastError string already toasted
+
+function renderActiveCam(){
+  const host=$('activeCam');
+  const c=S.cam||{};
+  const list=S.cams||[];
+  const st=(c.stateName||'OFF');
+  // Find the active saved camera (if any)
+  const active=list.find(x=>x.a);
+
+  if(!active){
+    host.innerHTML='<div class="empty">No camera connected.<br>Select one from your saved devices below, or scan for a new one.</div>';
+    return;
+  }
+
+  let badge, showDisconnect=false;
+  if(st==='CONNECTED'||st==='READY'){
+    badge='<span class="chip ok">CONNECTED</span>';
+    showDisconnect=true;
+  } else if(st==='SCANNING'||st==='CONNECTING'||st==='PAIRING') {
+    badge='<span class="chip warn">'+esc(st)+'</span>';
+    showDisconnect=false;
+  } else {
+    badge='<span class="chip" style="color:var(--dim)">'+esc(st||'OFF')+'</span>';
+    showDisconnect=false;
+  }
+
+  const ico=active.t?'i-bt':'i-aperture';
+  const brandName=active.t?'GoPro':'DJI Osmo';
+
+  host.innerHTML=
+    '<div class="active-card">'+
+      '<svg class="ic-lg"><use href="#'+ico+'"/></svg>'+
+      '<div class="ac-info">'+
+        '<b>'+esc(active.n||active.m)+'</b>'+
+        '<span>'+esc(active.m)+' \u00b7 '+brandName+'</span>'+
+      '</div>'+
+      '<div class="ac-actions">'+badge+
+        (showDisconnect?'<button class="btn disconnect" data-disconnect="'+list.indexOf(active)+'">Disconnect</button>':'')+
+      '</div>'+
+    '</div>';
+}
+
 function renderCams(){
+  try{
   const list=S.cams||[];const host=$('camList');
   if(!list.length){
-    host.innerHTML='<div class="empty">No cameras saved yet.<br>'+
-      'Pick a brand below and press <b>Start pairing</b> to discover one.</div>';
+    host.innerHTML='<div class="empty">No saved cameras. Scan for a new device below.</div>';
     return;}
-  const camSt=(S.cam&&S.cam.stateName)||'OFF';
+  
+  // Build set of discovered (online) MACs from pending_cams
+  const onlineMACs = new Set((S.pending_cams||[]).map(p=>p.mac));
+  
   host.innerHTML=list.map((c,i)=>{
-    let badge;
-    if(c.on)badge='<span class="chip ok">READY</span>';
-    else if(c.a)badge='<span class="chip warn">'+esc(camSt==='SCANNING'?'SCANNING':'CONNECTING')+'</span>';
-    else badge='<span class="chip" style="color:var(--dim)">OFFLINE</span>';
+    // Check if this saved camera is currently online/visible
+    const isOnline = onlineMACs.has(c.m);
+    const stateBadge = !c.a 
+      ? '<span class="chip '+(isOnline?'ok':'')+'" style="color:var(--dim)">'+(isOnline?'ON':'OFF')+'</span>'
+      : '';
     const act=c.a?'<span class="chip" style="color:var(--accent)">ACTIVE</span>'
-                 :'<button class="btn mini" data-use="'+i+'">Use</button>';
-    return '<div class="camrow">'+
+                 :'<button class="btn mini" data-connect="'+i+'">'+(isOnline?'Connect':'Offline')+'</button>';
+    return '<div class="camrow" data-mac="'+esc(c.m)+'" data-type="'+(c.t?1:0)+'">'+
       '<svg class="ic" style="color:'+(c.t?'var(--accent)':'var(--txt)')+'"><use href="#'+(c.t?'i-bt':'i-aperture')+'"/></svg>'+
       '<div class="ci"><b>'+esc(c.n||c.m)+'</b><span>'+esc(c.m)+' \u00b7 '+(c.t?'GoPro':'DJI Osmo')+'</span></div>'+
-      badge+act+
-      '<button class="xbtn" data-del="'+i+'" title="Forget camera">&times;</button></div>';
+      stateBadge+act+
+      '<button class="xbtn" data-forget="'+i+'" title="Forget camera">&times;</button></div>';
+  }).join('');
+  }catch(e){console.error('renderCams error:',e);}
+}
+
+$('camList').addEventListener('click',async e=>{
+  try{
+    const c=e.target.closest('[data-connect]');
+    if(c){const j=await api('/api/camera',{select:+c.dataset.connect});
+      toast(j.ok?'Selected \u2014 connecting\u2026 approve prompt on camera if shown':'Error: '+(j.error||'?'));poll();return;}
+    const f=e.target.closest('[data-forget]');
+    if(f){if(!confirm('Forget this camera? It will need to be re-paired.'))return;
+      const j=await api('/api/camera',{remove:+f.dataset.forget});
+      toast(j.ok?'Camera forgotten':'Error: '+(j.error||'?'));poll();return;}
+    const d=e.target.closest('[data-disconnect]');
+    if(d){
+      // Disconnect: remove the active camera from the saved list so the loop
+      // doesn't auto-reconnect. The user can re-pair later.
+      if(!confirm('Disconnect and forget this camera?'))return;
+      const j=await api('/api/camera',{remove:+d.dataset.disconnect});
+      toast(j.ok?'Disconnected':'Error: '+(j.error||'?'));poll();return;}
+  }catch(e){console.error('camList click error:',e);toast('Error: '+e.message);}
+});
+
+/* ---------- discover (Card 3): brand pills + scan button + cooldown ---------- */
+let pendingBrand=-1;         // -1 = none, 0 = DJI, 1 = GoPro
+let scanCooldownUntil=0;     // ms timestamp when the scan button re-enables
+let userScanActive=false;    // true ONLY between user click and cooldown end
+let discoveredCams=[];       // last seen discovered list from /api/scan
+let scanResultsActive=false; // mirrors S.scanning for poller use
+let scanPollTimer=null;      // setInterval for /api/scan polling
+let scanCdTimer=null;        // setInterval that ticks the countdown UI
+
+function syncDiscoverUI(){
+  try{
+    $('selDji').classList.toggle('on',pendingBrand===0);
+    $('selGp').classList.toggle('on',pendingBrand===1);
+    const btn=$('scanBtn');
+    const txt=$('scanBtnTxt');
+    const sp=$('scanSpinner');
+    const now=Date.now();
+    const cdLeft=Math.max(0,Math.ceil((scanCooldownUntil-now)/1000));
+
+    // 3-step UI state machine for Discover card:
+    // State 1: No brand picked → button disabled, "Pick a brand first"
+    // State 2: Scanning (10s cooldown) → disabled, countdown, spinner (first 5s)
+    // State 3: Completed → enabled, "Show All" toggle visible
+    if(pendingBrand<0){
+      // State 1: No brand picked
+      btn.disabled=true;
+      txt.textContent='Pick a brand first';
+      sp.style.display='none';
+      $('scanAllToggle').style.display='none';
+      $('scanAllHint').style.display='none';
+      return;
+    }
+
+    if(userScanActive && cdLeft>0){
+      // State 2: Cooldown in progress (scan window or cooldown)
+      btn.disabled=true;
+      txt.textContent='Scan for Cameras (Ready in '+cdLeft+'s)';
+      // Spinner only during first 5s (scan window), then hidden for remaining cooldown
+      if(cdLeft > 5) sp.style.display='flex'; else sp.style.display='none';
+      $('scanAllToggle').style.display='none';
+      $('scanAllHint').style.display='none';
+      return;
+    }
+
+    if(userScanActive && cdLeft<=0){
+      // Cooldown elapsed: re-enable for the next user click
+      userScanActive=false;
+      btn.disabled=(pendingBrand<0);
+      txt.textContent=pendingBrand<0?'Pick a brand first'
+        :('Scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
+      sp.style.display='none';
+      $('scanAllToggle').style.display='inline';
+      $('scanAllHint').style.display='none';
+      return;
+    }
+
+    // State 3: Ready (no active scan, brand picked)
+    btn.disabled=false;
+    txt.textContent='Scan for '+(pendingBrand?'GoPro':'DJI Osmo');
+    sp.style.display='none';
+    $('scanAllToggle').style.display='inline';
+    // Show/hide hint based on S.scanAll (backend setting)
+    $('scanAllHint').style.display = (S && S.scanAll) ? 'block' : 'none';
+  }catch(e){console.error('syncDiscoverUI error:',e);}
+}
+
+function rssiBars(r){
+  // 4-bar visual: -50dBm or stronger = 4 bars, -65 = 3, -80 = 2, else 1.
+  let n = 1;
+  if (r >= -50) n = 4;
+  else if (r >= -65) n = 3;
+  else if (r >= -80) n = 2;
+  return '<span class="rssi-bar s'+n+'" title="'+r+' dBm"><i></i><i></i><i></i><i></i></span>';
+}
+
+function renderDiscovered(){
+  const host=$('discList');
+  if(!discoveredCams||!discoveredCams.length){
+    host.innerHTML='<div class="empty">No devices found yet. Press <b>Scan for Cameras</b> above.</div>';
+    return;
+  }
+  // Dedupe by MAC (in case of duplicates)
+  const seen=new Set();
+  const uniq=discoveredCams.filter(r=>{
+    if(seen.has(r.mac))return false;
+    seen.add(r.mac);
+    return true;
+  });
+  // Sort: saved last (they already appear in Card 2). The backend already
+  // returns results sorted by RSSI desc; preserve that order here.
+  const savedMACS=new Set((S.cams||[]).map(c=>c.m));
+  const newOnes=uniq.filter(r=>!savedMACS.has(r.mac));
+  if(!newOnes.length){
+    host.innerHTML='<div class="empty">No new devices. All found cameras are already saved.</div>';
+    return;
+  }
+  host.innerHTML=newOnes.map(r=>{
+    const typeLabel=r.t==='GoPro'?'GoPro':'DJI Osmo';
+    const typeIcon=r.t==='GoPro'?'i-bt':'i-aperture';
+    return '<div class="discrow" data-mac="'+esc(r.mac)+'">'+
+      '<svg class="ic" style="color:var(--warn)"><use href="#'+typeIcon+'"/></svg>'+
+      '<div class="ci"><b>'+esc(r.n||r.mac)+'</b>'+
+        '<span>'+esc(r.mac)+' \u00b7 '+typeLabel+'</span></div>'+
+      rssiBars(r.rssi)+
+      '<button class="btn pair-save" data-pair="'+esc(r.mac)+'" data-pair-type="'+(r.t==='GoPro'?1:0)+'">Pair &amp; Save</button>'+
+    '</div>';
   }).join('');
 }
-$('camList').addEventListener('click',async e=>{
-  const u=e.target.closest('[data-use]');
-  if(u){const j=await api('/api/camera',{select:+u.dataset.use});
-    toast(j.ok?'Selected \u2014 connecting\u2026 approve prompt on camera if shown':'Error: '+(j.error||'?'));poll();return;}
-  const d=e.target.closest('[data-del]');
-  if(d){const j=await api('/api/camera',{remove:+d.dataset.del});
-    toast(j.ok?'Camera forgotten':'Error: '+(j.error||'?'));poll();}});
 
-/* ---------- two-step pairing: select brand, then confirm ---------- */
-let pendingBrand=-1;
-function syncPairUI(){
-  $('selDji').classList.toggle('on',pendingBrand===0);
-  $('selGp').classList.toggle('on',pendingBrand===1);
-  const pb=$('pairBtn');
-  pb.disabled=(pendingBrand<0);
-  pb.textContent=pendingBrand<0?'Start pairing'
-    :('Start pairing: scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
+$('discList').addEventListener('click',async e=>{
+  try{
+    const p=e.target.closest('[data-pair]');
+    if(p){
+      const mac=p.dataset.pair;
+      const type=+p.dataset.pairType;
+      p.disabled=true;
+      const j=await api('/api/camera',{pair:{mac:mac,type:type}});
+      if(j.ok){
+        toast('Saved! Connecting\u2026');
+        scanCooldownUntil=Date.now()+10000; // 10s cooldown after a pair
+      }else{
+        toast('Error: '+(j.error||'?'));
+        p.disabled=false;
+      }
+      poll();
+    }
+  }catch(e){console.error('pair click error:',e);toast('Error: '+e.message);}
+});
+
+async function pollDiscovered(){
+  try{
+    const r=await fetch('/api/scan',{cache:'no-store'});
+    if(r.ok){
+      const d=await r.json();
+      discoveredCams=d.results||[];
+      scanResultsActive=!!d.scanning;
+      renderDiscovered();
+    }
+  }catch(e){/* silent — radio contention */}
 }
-$('selDji').onclick=()=>{pendingBrand=0;syncPairUI();};
-$('selGp').onclick=()=>{pendingBrand=1;syncPairUI();};
-$('pairBtn').onclick=async()=>{
-  if(pendingBrand<0)return;
-  const j=await api('/api/settings',{camera:pendingBrand});
-  toast(j.ok?('Scanning for '+(pendingBrand?'GoPro':'DJI Osmo')+
-    '\u2026 tap Use when it appears'):'Error: '+(j.error||'?'));
-  poll();};
+function startScanPoll(){
+  if(scanPollTimer)return;
+  pollDiscovered();
+  scanPollTimer=setInterval(pollDiscovered,1500);
+}
+function stopScanPoll(){
+  if(scanPollTimer){clearInterval(scanPollTimer);scanPollTimer=null;}
+}
+
+function startCooldownTicker(){
+  if(scanCdTimer)return;
+  scanCdTimer=setInterval(()=>{
+    syncDiscoverUI();
+    const now=Date.now();
+    // Once the cooldown finishes and the scan poller has wound down,
+    // re-enable the button by clearing userScanActive.
+    if(now>scanCooldownUntil && userScanActive){
+      // Give the poller ~1s extra to grab the last few results, then stop.
+      if(!scanResultsActive){
+        userScanActive=false;
+        stopScanPoll();
+        syncDiscoverUI();
+        clearInterval(scanCdTimer);
+        scanCdTimer=null;
+      }
+    }
+  },500);
+}
+
+$('selDji').onclick=()=>{try{pendingBrand=0;syncDiscoverUI();}catch(e){console.error(e);}};
+$('selGp').onclick=()=>{try{pendingBrand=1;syncDiscoverUI();}catch(e){console.error(e);}};
+
+/* ---------- "Show all nearby devices" toggle ---------- */
+$('scanAllToggle').onclick=async e=>{
+  try{
+    e.preventDefault();
+    const want = !S.scanAll;
+    const j=await api('/api/settings',{scanAll:want});
+    if(!j.ok){toast('Error: '+(j.error||'?'));return;}
+    S.scanAll = want;
+    $('scanAllToggle').classList.toggle('on', want);
+    $('scanAllToggle').textContent = want
+      ? 'Showing all nearby devices — click to filter to known cameras'
+      : 'Camera not listed? Show all nearby devices';
+    $('scanAllHint').style.display = want ? 'block' : 'none';
+    toast(want ? 'Showing every nearby device' : 'Filtered to known cameras');
+    // Trigger a fresh scan so the new mode takes effect immediately.
+    if(!userScanActive && pendingBrand>=0){
+      $('scanBtn').click();
+    } else {
+      poll();
+    }
+  }catch(e){console.error('scanAllToggle error:',e);toast('Error: '+e.message);}
+};
+// Sync the toggle label on initial load and on every poll.
+function syncScanAllToggle(){
+  const want = !!S.scanAll;
+  const link = $('scanAllToggle');
+  if(!link) return;
+  link.classList.toggle('on', want);
+  link.textContent = want
+    ? 'Showing all nearby devices — click to filter to known cameras'
+    : 'Camera not listed? Show all nearby devices';
+  const hint = $('scanAllHint');
+  if(hint) hint.style.display = want ? 'block' : 'none';
+}
+
+$('scanBtn').onclick=async()=>{
+  try{
+    if(pendingBrand<0)return toast('Pick a brand first');
+    if(userScanActive)return;  // already in cooldown/scanning
+    // 1) If the picked brand differs from the active backend, set it
+    //    first (no scan side-effect — this only changes settings.camera).
+    const wantBrand = pendingBrand;
+    const curBrand  = (S&&S.cam)?S.cam.type:settingsGet()?0:0;
+    if (curBrand !== wantBrand){
+      const j = await api('/api/settings',{camera:wantBrand});
+      if(!j.ok){toast('Error: '+(j.error||'?'));return;}
+    }
+    // 2) Clear local list and trigger the actual scan via /api/camera.
+    //    This is the ONLY code path that may start a scan.
+    discoveredCams = [];
+    renderDiscovered();
+    const s = await api('/api/camera',{scan:true});
+    if(!s.ok){
+      // Server-side rejected (already running, etc.) — don't start cooldown.
+      toast('Scan: '+(s.error||'?'));
+      return;
+    }
+    // 3) Mark the UI as "user is scanning" + start 10s cooldown.
+    userScanActive=true;
+    scanCooldownUntil=Date.now()+10000;
+    // 4) Show the spinner for the first 5s of the cooldown (scan window).
+    $('scanSpinner').style.display='flex';
+    setTimeout(()=>{ $('scanSpinner').style.display='none'; }, 5000);
+    // 5) Start polling /api/scan so Card 3 fills with results.
+    startScanPoll();
+    startCooldownTicker();
+    syncDiscoverUI();
+    toast('Scanning for '+(pendingBrand?'GoPro':'DJI Osmo')+'\u2026');
+  }catch(e){console.error('scanBtn error:',e);toast('Error: '+e.message);}
+};
 $('saveWifi').onclick=async()=>{
-  const ssid=$('inSsid').value.trim(),pass=$('inPass').value.trim();
-  if(!ssid)return toast('Enter an SSID first');
-  if(pass&&pass.length<8)return toast('Password must be empty or 8+ chars');
-  const body={ssid:ssid};if(pass)body.pass=pass;
-  const j=await api('/api/settings',body);
-  if(j.ok)toast('Wi-Fi saved \u2014 AP restarting, reconnect to "'+ssid+'"');
-  else toast('Error: '+(j.error||'?'));};
-['btnReboot','btnReboot2'].forEach(id=>$(id).onclick=async()=>{
-  const j=await api('/api/command',{cmd:'reboot'});
-  if(j.ok)toast('Rebooting\u2026 reconnect in ~10 s');});
+  try{
+    const ssid=$('inSsid').value.trim(),pass=$('inPass').value.trim();
+    if(!ssid)return toast('Enter an SSID first');
+    if(pass&&pass.length<8)return toast('Password must be empty or 8+ chars');
+    const body={ssid:ssid};if(pass)body.pass=pass;
+    const j=await api('/api/settings',body);
+    if(j.ok)toast('Wi-Fi saved \u2014 AP restarting, reconnect to "'+ssid+'"');
+    else toast('Error: '+(j.error||'?'));
+  }catch(e){console.error('saveWifi error:',e);toast('Error: '+e.message);}
+};
+['btnReboot'].forEach(id=>{const el=$(id);if(el)el.onclick=async()=>{
+  try{
+    const j=await api('/api/command',{cmd:'reboot'});
+    if(j.ok)toast('Rebooting\u2026 reconnect in ~10 s');
+  }catch(e){console.error('reboot error:',e);toast('Error: '+e.message);}
+}});
 
 /* ---------- MSP console ---------- */
 $('mspSend').onclick=async()=>{
-  const out=$('mspOut');
-  out.textContent='Querying FC…';
-  const j=await api('/api/msp',{cmd:+$('mspCmd').value});
-  if(!j.ok){out.textContent='Error: '+(j.error||'?');return;}
-  let dump='';
-  for(let i=0;i<j.payload.length;i+=32){
-    const bytes=(j.payload.substr(i,32).match(/../g)||[]).join(' ');
-    dump+='$M> cmd '+String(j.cmd).padStart(3)+'  off '+String(i/2).padStart(3,'0')+'  '+bytes+'\n';}
-  out.textContent='OK \u2014 '+j.len+' payload bytes\n\n'+dump;};
+  try{
+    const out=$('mspOut');
+    out.textContent='Querying FC\u2026';
+    const j=await api('/api/msp',{cmd:+$('mspCmd').value});
+    if(!j.ok){out.textContent='Error: '+(j.error||'?');return;}
+    let dump='';
+    for(let i=0;i<j.payload.length;i+=32){
+      const bytes=(j.payload.substr(i,32).match(/../g)||[]).join(' ');
+      dump+='$M> cmd '+String(j.cmd).padStart(3)+'  off '+String(i/2).padStart(3,'0')+'  '+bytes+'\n';}
+    out.textContent='OK \u2014 '+j.len+' payload bytes\n\n'+dump;
+  }catch(e){console.error('mspSend error:',e);toast('Error: '+e.message);}
+};
 
 /* ---------- render ---------- */
 const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
@@ -584,6 +978,7 @@ function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
 function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
 
 function render(){
+  try{
   if(!S)return;
   const c=S.cam||{},f=S.fc||{},r=S.rec||{},sys=S.sys||{};
   const st=c.stateName||'OFF';
@@ -665,34 +1060,59 @@ function render(){
   $('sHeap').textContent=sys.heap?Math.round(sys.heap/1024)+'K':'--';
   $('sUp').textContent=mmss(sys.uptime||0);
   $('sIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
-  $('ftIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';}
-
-/* ---------- poll ---------- */
-async function poll(){
-  try{const r=await fetch('/api/status',{cache:'no-store'});
-    S=await r.json();
-    /* sync forms (skip focused elements so typing isn't clobbered) */
-    const rec=S.rec||{},ae=document.activeElement;
-    if(ae!==$('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
-    if(ae!==$('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));
-      $('lblThr').textContent=$('rngThr').value+' \u00b5s';}
-    if(ae!==$('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));
-      $('lblDeb').textContent=$('rngDeb').value+' ms';}
-    if(ae!==$('swRoa'))$('swRoa').checked=!!S.roa;
-    $('swSod').disabled=!S.roa;
-    $('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;
-    if(ae!==$('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
-    /* brand pills: show pending choice while choosing, else the active one */
-    if(pendingBrand>=0)syncPairUI();
-    else{$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
-         $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);}
-    renderCams();
-    render();
-  }catch(e){$('stateTxt').textContent='OFFLINE';
-    $('stateDot').style.background='var(--warn)';}
+  $('ftIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
+  }catch(e){console.error('Render error:',e);}
 }
-setInterval(poll,1000);
-poll();
+
+/* ---------- poll (silent on radio contention, 1500ms interval) ---------- */
+async function poll(){
+  try{
+    const res = await fetch('/api/status',{cache:'no-store'});
+    if(res.ok){
+      S = await res.json();
+      /* sync forms (skip focused elements so typing isn't clobbered) */
+      const rec=S.rec||{},ae=document.activeElement;
+      if(ae!==$('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
+      if(ae!==$('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));
+        $('lblThr').textContent=$('rngThr').value+' \u00b5s';}
+      if(ae!==$('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));
+        $('lblDeb').textContent=$('rngDeb').value+' ms';}
+      if(ae!==$('swRoa'))$('swRoa').checked=!!S.roa;
+      $('swSod').disabled=!S.roa;
+      $('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;
+      if(ae!==$('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
+      // brand pills reflect the live backend brand only when user has NOT
+      // already picked a pending brand.
+      if(pendingBrand<0){
+        $('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+        $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
+      }
+      renderActiveCam();
+      renderCams();
+      renderDiscovered();
+      syncDiscoverUI();
+      syncScanAllToggle();
+      render();
+      // Surface backend connect-attempt errors as a single toast (only when
+      // they change, so we don't spam on every 1.5s poll).
+      if (S.lastError && S.lastError !== lastErrorShown){
+        lastErrorShown = S.lastError;
+        // Brand-aware message — backend already says "not a DJI Osmo camera"
+        // or "not a GoPro camera". Keep it short and clear.
+        toast(S.lastError);
+      } else if (!S.lastError){
+        lastErrorShown = '';
+      }
+    } else {
+      console.debug("Poll skipped: HTTP "+res.status);
+    }
+  }catch(e){
+    // Silently handle ESP32 radio contention or reboots during BLE scan
+    console.debug("Poll skipped: ESP32 radio busy scanning.");
+  }
+  setTimeout(poll, 1500);
+}
+setTimeout(poll, 100);
 </script>
 </body>
 </html>)rawliteral";

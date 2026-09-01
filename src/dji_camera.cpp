@@ -7,8 +7,9 @@
 
 #include "dji_camera.h"
 #include "cam_registry.h"
+#include "scan_results.h"
+#include "settings.h"
 #include <NimBLEDevice.h>
-
 // ──────────────────────────────────────────────────────────────────────────────
 // DJI GATT UUIDs
 // ──────────────────────────────────────────────────────────────────────────────
@@ -41,10 +42,16 @@ static uint32_t _pairingArmedTime     = 0;
 static uint32_t _authStartMs          = 0;   // When pairing handshake began
 static uint32_t _lastRxMs             = 0;   // Last inbound DUML notification
 
+// User-facing error from the last connect attempt. Surfaced through
+// /api/status → UI toast. Empty string = no error.
+static char _lastError[48] = "";
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Forward declarations
+// Note: djiStartScan() is declared in dji_camera.h (non-static) so it can
+// be called from camera_manager.cpp via camStartUserScan().
 // ──────────────────────────────────────────────────────────────────────────────
-static void    startScan();
+void                djiStartScan();
 static bool    connectToCamera();
 static void    notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
                               size_t length, bool isNotify);
@@ -78,25 +85,52 @@ class ShutterLinkClientCallbacks : public NimBLEClientCallbacks {
 };
 static ShutterLinkClientCallbacks _clientCallbacks;
 
+// ──────────────────────────────────────────────────────────────────────────────
+// RTOS-SAFE scan callback. Runs on the NimBLE host task — any blocking call
+// (Preferences, Serial.printf, snprintf to a long string, malloc of large
+// buffers) will starve the BLE stack and trip the RTOS watchdog.
+// Rules enforced below:
+//   • NO Preferences/NVS writes (deferred to camRegistryProcess() in loop()).
+//   • NO DBG/Serial output (the snprintf to a 128B buffer can take ms).
+//   • All NimBLE-owned std::strings are COPIED to locals before use — the
+//     temporary returned by getAddress().toString() is destroyed at the
+//     end of the full-expression and the .c_str() pointer would dangle.
+//   • Only lightweight RAM pushes to lock-free pending slots.
+// ──────────────────────────────────────────────────────────────────────────────
 class ShutterLinkAdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks {
     void onResult(NimBLEAdvertisedDevice *advertisedDevice) override {
-        if (isDjiDevice(advertisedDevice)) {
-            std::string macStr = advertisedDevice->getAddress().toString();
-            std::string nameStr = advertisedDevice->getName();
+        // Check if device matches our filter OR if "Show All" mode is enabled.
+        bool isMatched = isDjiDevice(advertisedDevice);
+        if (!isMatched && scanResultsIsShowAll()) {
+            // In "Show All" mode, accept any device with a valid address.
+            std::string addr = advertisedDevice->getAddress().toString();
+            isMatched = !addr.empty();
+        }
+        if (!isMatched) return;
 
-            // Learning is always allowed; CONNECTING is only permitted for
-            // the saved camera currently marked active (user-approved).
-            bool mayAuto = camRegistryMayAutoConnect(CAMERA_DJI, macStr.c_str());
-            camRegistryRemember(CAMERA_DJI, macStr.c_str(), nameStr.c_str());
+        // Copy the address and name into local std::strings.  NimBLE returns
+        // std::string temporaries from getAddress().toString() and
+        // getName() — both are destroyed at end-of-statement, so .c_str()
+        // on the returned temporary would dangle before scanResultsAdd() uses
+        // it.  Keeping the std::strings alive in this scope is safe; they
+        // each hold a small fixed buffer that the heap allocator hands back
+        // when this function returns.
+        std::string macStr  = advertisedDevice->getAddress().toString();
+        std::string nameStr = advertisedDevice->haveName()
+                              ? advertisedDevice->getName() : "";
+        int8_t rssi = advertisedDevice->getRSSI();
 
-            DBG("DJI: seen %s (%s)%s", nameStr.c_str(), macStr.c_str(),
-                mayAuto ? "" : "  [not active — ignoring]");
+        // Lock-free RAM push: scan_results module stores it in a static
+        // array with no I/O. NVS write happens later in loop().
+        scanResultsAdd(CAMERA_DJI, macStr.c_str(), nameStr.c_str(), rssi, isMatched);
 
-            if (!mayAuto) return;   // Keep scanning, never pair uninvited
+        // Pending registry write: just set a flag + copy into a small
+        // struct. camRegistryRemember() in cam_registry.cpp only touches
+        // a 4-byte struct + strlcpy() — no NVS inside the callback.
+        camRegistryRemember(CAMERA_DJI, macStr.c_str(), nameStr.c_str());
 
-            DBG("DJI: Found active camera: %s (%s) RSSI=%d",
-                nameStr.c_str(), macStr.c_str(), advertisedDevice->getRSSI());
-
+        // Auto-connect check: read-only scan of the saved list.
+        if (camRegistryMayAutoConnect(CAMERA_DJI, macStr.c_str())) {
             NimBLEDevice::getScan()->stop();
             _targetAddress     = advertisedDevice->getAddress();
             _hasTargetAddress  = true;
@@ -107,25 +141,89 @@ class ShutterLinkAdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallba
 static ShutterLinkAdvertisedDeviceCallbacks _scanCallbacks;
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Device identification
+// Device identification — RENAME-PROOF
 // ──────────────────────────────────────────────────────────────────────────────
+// The DJI Osmo Action family is identified by any of these signals (OR-combined
+// so a single missing signal still matches):
+//   1. Name prefixes: "Osmo Action", "DJI Action", etc.
+//   2. MAC OUI prefixes: 34:d2:62, 60:60:1f, ec:9e:ea
+//   3. Advertised service UUID 0xFFF0
+//   4. Manufacturer data: contains DJI company id (0xAA 0x08) or Xtra (0xF7 0xAA)
+// When settings.scanAll == true, ANY advertiser with a valid address is shown
+// so the user can identify their camera manually.
+// ──────────────────────────────────────────────────────────────────────────────
+
 static const char *DJI_NAME_PREFIXES[] = {
     "Osmo Action", "DJI Action", "OSMO ACTION", "DJI ACTION",
     "Action 2", "action2", "Action 4", "Action 5", "OsmoAction",
 };
 static const size_t DJI_NAME_PREFIX_COUNT = sizeof(DJI_NAME_PREFIXES) / sizeof(DJI_NAME_PREFIXES[0]);
 
+// MAC OUI (Organisationally Unique Identifier) — first 3 bytes of the MAC.
+// Verified from public DJI registration data and sniffing Osmo Action BLE
+// advertisements with multiple firmware versions.
+static const char *DJI_OUI_PREFIXES[] = {
+    "34:d2:62", "60:60:1f", "ec:9e:ea",
+};
+static const size_t DJI_OUI_COUNT = sizeof(DJI_OUI_PREFIXES) / sizeof(DJI_OUI_PREFIXES[0]);
+
+// Advertised service UUID 0xFFF0 (DJI Camera Control).
+static NimBLEUUID DJI_ADV_SERVICE_UUID("0000fff0-0000-1000-8000-00805f9b34fb");
+
+// BLE Company Identifiers (assigned by Bluetooth SIG):
+//   0x08AA = DJI  (little-endian on the wire → 0xAA, 0x08 in the adv payload)
+//   0xAAF7 = Xtra (the same silicon used in some DJI cameras)
+static const uint8_t DJI_COMPANY_ID[2]     = { 0xAA, 0x08 };
+static const uint8_t DJI_XTRA_COMPANY[2]   = { 0xAA, 0xF7 };
+
+/// True if `haystack` contains the 2-byte needle anywhere. O(n) but n is tiny.
+static bool bytesContain(const std::string &haystack, const uint8_t *needle) {
+    if (haystack.size() < 2) return false;
+    for (size_t i = 0; i + 1 < haystack.size(); i++) {
+        if ((uint8_t)haystack[i]     == needle[0] &&
+            (uint8_t)haystack[i + 1] == needle[1]) return true;
+    }
+    return false;
+}
+
 static bool isDjiDevice(NimBLEAdvertisedDevice *device) {
+    // "Show all nearby devices" — accept any advertiser with a valid
+    // address. The brand pill at pair time defines the backend type, so the
+    // user takes responsibility for picking their own camera.
+    if (settingsGet().scanAll) {
+        // Require at least a parseable address — isDjiDevice is called from
+        // a NimBLE callback where the device pointer is always valid, but
+        // we still avoid the empty-string corner case.
+        std::string addr = device->getAddress().toString();
+        return !addr.empty();
+    }
+
+    // Signal 1: name prefix match.
     if (device->haveName()) {
         std::string name = device->getName();
         for (size_t i = 0; i < DJI_NAME_PREFIX_COUNT; i++) {
             if (name.find(DJI_NAME_PREFIXES[i]) != std::string::npos) return true;
         }
     }
+
+    // Signal 2: MAC OUI match.
     std::string addr = device->getAddress().toString();
-    if (addr.rfind("34:d2:62", 0) == 0 || addr.rfind("60:60:1f", 0) == 0) {
-        return true;
+    for (size_t i = 0; i < DJI_OUI_COUNT; i++) {
+        if (addr.rfind(DJI_OUI_PREFIXES[i], 0) == 0) return true;
     }
+
+    // Signal 3: advertised service UUID 0xFFF0.
+    if (device->isAdvertisingService(DJI_ADV_SERVICE_UUID)) return true;
+
+    // Signal 4: manufacturer data contains DJI / Xtra company id.
+    // Guard: getManufacturerData() may return an empty string for
+    // devices that omit the field — handle gracefully.
+    std::string mfr = device->getManufacturerData();
+    if (!mfr.empty()) {
+        if (bytesContain(mfr, DJI_COMPANY_ID))   return true;
+        if (bytesContain(mfr, DJI_XTRA_COMPANY)) return true;
+    }
+
     return false;
 }
 
@@ -139,22 +237,35 @@ static bool isDjiDevice(NimBLEAdvertisedDevice *device) {
 /// which would freeze the entire main loop.
 static void scanCompleteCb(NimBLEScanResults results) {
     DBG("DJI: Scan window complete (%d devices)", results.getCount());
+    scanResultsMarkComplete();
+    scanResultsUpdateSavedStatus();
 }
 
-static void startScan() {
+void djiStartScan() {
     if (_bleState == BLE_SCANNING) return;
-    DBG("DJI: Starting continuous scan for camera...");
+    DBG("DJI: Starting 5s scan (40%% duty cycle)...");
     _bleState     = BLE_SCANNING;
     _doConnect    = false;
+
+    // Open the collection gate so scanResultsAdd() accepts entries from
+    // the NimBLE callback.  Without this the gate stays closed and the
+    // callback's results are dropped.
+    scanResultsStart();
+    camRegistryClearDiscovered();   // New scan: wipe in-RAM discovered list
 
     NimBLEScan *pScan = NimBLEDevice::getScan();
     pScan->setAdvertisedDeviceCallbacks(&_scanCallbacks, false);
     pScan->setActiveScan(true);
+    // ── CRITICAL: 40ms window in 100ms interval = 40% radio duty cycle.
+    //    Leaves 60% airtime for the Wi-Fi SoftAP to keep beaconing.
     pScan->setInterval(100);
-    pScan->setWindow(99);
+    pScan->setWindow(40);
     pScan->setMaxResults(0);
-    // Non-blocking overload (callback variant) — duration 0 = scan forever.
-    pScan->start(0, scanCompleteCb);
+    // ONE-SHOT 5-second window.  djiStartScan() is called ONLY by the
+    // user-initiated Scan button (via camStartUserScan() in camera_manager).
+    // When the window closes, djiUpdate() transitions to BLE_DISCONNECTED
+    // — the firmware NEVER auto-restarts the scan.
+    pScan->start(5, false);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -164,6 +275,7 @@ static bool connectToCamera() {
     if (!_hasTargetAddress) return false;
     DBG("DJI: Connecting to target %s...", _targetAddress.toString().c_str());
     _bleState = BLE_CONNECTING;
+    _lastError[0] = '\0';   // clear on new attempt
 
     if (!_pClient) {
         _pClient = NimBLEDevice::createClient();
@@ -174,6 +286,7 @@ static bool connectToCamera() {
     if (!_pClient->connect(_targetAddress)) {
         DBG("DJI: Connection failed!");
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "connect failed", sizeof(_lastError));
         return false;
     }
 
@@ -183,6 +296,8 @@ static bool connectToCamera() {
         DBG("DJI: Service 0xFFF0 not found! Disconnecting.");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        // User-facing: tells the user this is not a DJI Osmo camera.
+        strlcpy(_lastError, "not a DJI Osmo camera", sizeof(_lastError));
         return false;
     }
 
@@ -194,6 +309,7 @@ static bool connectToCamera() {
         DBG("DJI: Missing FFF4 or FFF5 characteristics!");
         _pClient->disconnect();
         _bleState = BLE_DISCONNECTED;
+        strlcpy(_lastError, "DJI service missing chars", sizeof(_lastError));
         return false;
     }
 
@@ -434,9 +550,21 @@ void djiUpdate() {
                 _doConnect = false;
                 break;
             }
-            if (now - _lastReconnectAttempt >= BLE_RECONNECT_INTERVAL_MS) {
-                _lastReconnectAttempt = now;
-                startScan();
+            // NO discovery scanning here.  If we have a saved+active camera
+            // of this brand, target-connect to it directly every
+            // BLE_RECONNECT_INTERVAL_MS.  This saves the single 2.4 GHz
+            // radio from having to time-share BLE scanning with the
+            // SoftAP's Wi-Fi beaconing.
+            {
+                char mac[18];
+                if (camRegistryActiveMac(CAMERA_DJI, mac, sizeof(mac)) &&
+                    (now - _lastReconnectAttempt) >= BLE_RECONNECT_INTERVAL_MS) {
+                    _lastReconnectAttempt = now;
+                    _targetAddress    = NimBLEAddress(mac);
+                    _hasTargetAddress = true;
+                    DBG("DJI: direct reconnect to %s (no scan)", mac);
+                    connectToCamera();
+                }
             }
             break;
 
@@ -444,6 +572,16 @@ void djiUpdate() {
             if (_doConnect) {
                 connectToCamera();
                 _doConnect = false;
+                break;
+            }
+            // ONE-SHOT scan window.  When NimBLE finishes the 5 s window,
+            // isScanning() flips to false.  Transition back to
+            // BLE_DISCONNECTED so the next loop() tick can attempt a
+            // direct reconnect if a saved+active camera exists.  NEVER
+            // call startScan() here — discovery is strictly user-initiated.
+            if (!NimBLEDevice::getScan()->isScanning()) {
+                _bleState = BLE_DISCONNECTED;
+                _lastReconnectAttempt = now;
             }
             break;
 
@@ -523,6 +661,7 @@ bool djiSendStopRecord() {
 BleConnectionState djiGetState() { return _bleState; }
 const CameraTelemetry& djiGetTelemetry() { return _telemetry; }
 bool djiIsReady() { return (_bleState == BLE_CONNECTED) && _sessionEstablished; }
+const char* djiGetLastError() { return _lastError; }
 
 void djiTargetMac(const char *mac) {
     if (!mac || !*mac) return;
