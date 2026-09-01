@@ -622,11 +622,17 @@ function renderActiveCam(){
     return;
   }
 
-  let badge;
-  if(st==='READY')badge='<span class="chip ok">READY</span>';
-  else if(st==='SCANNING'||st==='CONNECTING'||st==='PAIRING')
+  let badge, showDisconnect=false;
+  if(st==='CONNECTED'||st==='READY'){
+    badge='<span class="chip ok">CONNECTED</span>';
+    showDisconnect=true;
+  } else if(st==='SCANNING'||st==='CONNECTING'||st==='PAIRING') {
     badge='<span class="chip warn">'+esc(st)+'</span>';
-  else badge='<span class="chip" style="color:var(--dim)">'+esc(st)+'</span>';
+    showDisconnect=false;
+  } else {
+    badge='<span class="chip" style="color:var(--dim)">'+esc(st||'OFF')+'</span>';
+    showDisconnect=false;
+  }
 
   const ico=active.t?'i-bt':'i-aperture';
   const brandName=active.t?'GoPro':'DJI Osmo';
@@ -639,7 +645,7 @@ function renderActiveCam(){
         '<span>'+esc(active.m)+' \u00b7 '+brandName+'</span>'+
       '</div>'+
       '<div class="ac-actions">'+badge+
-        '<button class="btn disconnect" data-disconnect="'+list.indexOf(active)+'">Disconnect</button>'+
+        (showDisconnect?'<button class="btn disconnect" data-disconnect="'+list.indexOf(active)+'">Disconnect</button>':'')+
       '</div>'+
     '</div>';
 }
@@ -650,14 +656,22 @@ function renderCams(){
   if(!list.length){
     host.innerHTML='<div class="empty">No saved cameras. Scan for a new device below.</div>';
     return;}
+  
+  // Build set of discovered (online) MACs from pending_cams
+  const onlineMACs = new Set((S.pending_cams||[]).map(p=>p.mac));
+  
   host.innerHTML=list.map((c,i)=>{
-    const badge=!c.a?'<span class="chip" style="color:var(--dim)">SAVED</span>':'';
+    // Check if this saved camera is currently online/visible
+    const isOnline = onlineMACs.has(c.m);
+    const stateBadge = !c.a 
+      ? '<span class="chip '+(isOnline?'ok':'')+'" style="color:var(--dim)">'+(isOnline?'ON':'OFF')+'</span>'
+      : '';
     const act=c.a?'<span class="chip" style="color:var(--accent)">ACTIVE</span>'
-                 :'<button class="btn mini" data-connect="'+i+'">Connect</button>';
+                 :'<button class="btn mini" data-connect="'+i+'">'+(isOnline?'Connect':'Offline')+'</button>';
     return '<div class="camrow" data-mac="'+esc(c.m)+'" data-type="'+(c.t?1:0)+'">'+
       '<svg class="ic" style="color:'+(c.t?'var(--accent)':'var(--txt)')+'"><use href="#'+(c.t?'i-bt':'i-aperture')+'"/></svg>'+
       '<div class="ci"><b>'+esc(c.n||c.m)+'</b><span>'+esc(c.m)+' \u00b7 '+(c.t?'GoPro':'DJI Osmo')+'</span></div>'+
-      badge+act+
+      stateBadge+act+
       '<button class="xbtn" data-forget="'+i+'" title="Forget camera">&times;</button></div>';
   }).join('');
   }catch(e){console.error('renderCams error:',e);}

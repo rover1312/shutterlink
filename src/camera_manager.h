@@ -45,4 +45,7 @@ void camKick();
 /// NOT auto-restart the scan after the 5 s window closes.
 void camStartUserScan();
 
+/// Disconnect current camera and stop any BLE operations (for UI disconnect).
+void camDisconnect();
+
 #endif // CAMERA_MANAGER_H
