@@ -6,6 +6,56 @@
 #include "dji_camera.h"
 #include "gopro_camera.h"
 #include <NimBLEDevice.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <cstring>
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Security & Concurrency Globals
+// ──────────────────────────────────────────────────────────────────────────────
+
+static SemaphoreHandle_t g_stateMutex = NULL;
+static SemaphoreHandle_t g_scanMutex = NULL;
+
+#define SAFE_STRNCPY(dest, src, size) do { \
+    if (size > 0) { \
+        strncpy((char*)(dest), (const char*)(src), (size) - 1); \
+        ((char*)(dest))[(size) - 1] = '\0'; \
+    } \
+} while(0)
+
+// Helper to safely sanitize device names (prevent XSS injection via BLE ads)
+void sanitizeDeviceName(char* dest, const char* src, size_t maxSize) {
+    if (!dest || !src || maxSize == 0) return;
+    
+    size_t j = 0;
+    for (size_t i = 0; src[i] != '\0' && j < maxSize - 1; i++) {
+        char c = src[i];
+        // Allow only alphanumeric, space, dash, underscore, dot
+        if ((c >= 'a' && c <= 'z') || 
+            (c >= 'A' && c <= 'Z') || 
+            (c >= '0' && c <= '9') || 
+            c == ' ' || c == '-' || c == '_' || c == '.') {
+            dest[j++] = c;
+        } else {
+            // Replace unsafe chars with '?'
+            dest[j++] = '?';
+        }
+    }
+    dest[j] = '\0';
+}
+
+// Thread-safe initialization of mutexes
+static void initMutexes() {
+    if (g_stateMutex == NULL) {
+        g_stateMutex = xSemaphoreCreateMutex();
+        configASSERT(g_stateMutex);
+    }
+    if (g_scanMutex == NULL) {
+        g_scanMutex = xSemaphoreCreateMutex();
+        configASSERT(g_scanMutex);
+    }
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Internal state
@@ -33,6 +83,9 @@ static void shutdownActiveBackend() {
 
 void camInit() {
     if (_stackReady) return;
+
+    // Initialize thread-safety primitives first
+    initMutexes();
 
     DBG("CAM: Initialising NimBLE stack...");
     NimBLEDevice::init("ESP32-ShutterLink");
@@ -130,6 +183,11 @@ void camKick() {
 
 // Disconnect current camera and stop BLE operations (for UI disconnect)
 void camDisconnect() {
+    // Thread-safe shutdown
+    if (g_stateMutex != NULL) {
+        xSemaphoreTake(g_stateMutex, portMAX_DELAY);
+    }
+    
     shutdownActiveBackend();
     
     // Clear active camera flag in settings
@@ -143,6 +201,10 @@ void camDisconnect() {
     settingsSave();
     
     DBG("CAM: disconnected active camera");
+    
+    if (g_stateMutex != NULL) {
+        xSemaphoreGive(g_stateMutex);
+    }
 }
 
 // User-initiated one-shot discovery scan.  Called from the /api/camera
@@ -151,9 +213,19 @@ void camDisconnect() {
 // 5 s window closes (acceptance criterion D).
 void camStartUserScan() {
     if (!_stackReady) return;
+    
+    // Thread-safe scan start
+    if (g_scanMutex != NULL) {
+        xSemaphoreTake(g_scanMutex, portMAX_DELAY);
+    }
+    
     CameraType t = settingsGet().camera;
     DBG("CAM: user-initiated scan (backend=%s)", cameraTypeName(t));
 
     if (t == CAMERA_GOPRO) gpStartScan();
     else                    djiStartScan();
+    
+    if (g_scanMutex != NULL) {
+        xSemaphoreGive(g_scanMutex);
+    }
 }
