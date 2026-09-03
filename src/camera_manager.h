@@ -48,4 +48,8 @@ void camStartUserScan();
 /// Disconnect current camera and stop any BLE operations (for UI disconnect).
 void camDisconnect();
 
+/// Sanitize device name to prevent XSS injection via BLE advertisements.
+/// Only allows alphanumeric, space, dash, underscore, dot. Replaces others with '?'.
+void sanitizeDeviceName(char* dest, const char* src, size_t maxSize);
+
 #endif // CAMERA_MANAGER_H

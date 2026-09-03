@@ -13,6 +13,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <ctype.h>
 #include "config.h"
 #include "settings.h"
 #include "camera_manager.h"
@@ -410,10 +411,32 @@ static void handleCameraPost() {
         // "pair" body: {"mac":"AA:BB:...","type":0|1}
         String mac = jsonGetStr(body, "mac");
         long type = jsonGetNum(body, "type", -1);
-        if (!mac.length() || (type != CAMERA_DJI && type != CAMERA_GOPRO)) {
+        
+        // Security: Validate MAC format strictly (17 chars, XX:XX:XX:XX:XX:XX)
+        if (mac.length() != 17) {
+            sendJsonError("pair: invalid MAC length");
+            return;
+        }
+        for (int i = 0; i < 17; i++) {
+            char c = mac.charAt(i);
+            if (i % 3 == 2) {
+                if (c != ':') {
+                    sendJsonError("pair: invalid MAC format");
+                    return;
+                }
+            } else {
+                if (!isHexadecimalDigit(c)) {
+                    sendJsonError("pair: invalid MAC character");
+                    return;
+                }
+            }
+        }
+        
+        if ((type != CAMERA_DJI && type != CAMERA_GOPRO)) {
             sendJsonError("pair: mac and type required");
             return;
         }
+        
         // Check if device is currently visible in scan results (online check)
         uint8_t dcount = 0;
         const ScanResult *dr = camRegistryDiscovered(dcount);
@@ -422,7 +445,8 @@ static void handleCameraPost() {
         for (uint8_t i = 0; i < dcount; i++) {
             if (strcasecmp(dr[i].mac, mac.c_str()) == 0 && dr[i].type == (uint8_t)type) {
                 isOnline = true;
-                strlcpy(nameBuf, dr[i].name, sizeof(nameBuf));
+                // Sanitize device name to prevent XSS
+                sanitizeDeviceName(nameBuf, dr[i].name, sizeof(nameBuf));
                 break;
             }
         }
@@ -559,11 +583,16 @@ static void handleScanResults() {
 
     for (uint8_t i = 0; i < dcount; i++) {
         const char *typeStr = (dr[i].type == CAMERA_GOPRO) ? "GoPro" : "DJI Osmo";
+        
+        // Sanitize device name before sending to client (prevent XSS)
+        char sanitizedName[24] = "";
+        sanitizeDeviceName(sanitizedName, dr[i].name, sizeof(sanitizedName));
+        
         w = snprintf(p, left,
             "%s{\"mac\":\"%s\",\"name\":\"%s\",\"t\":\"%s\",\"r\":%d}",
             i ? "," : "",
             dr[i].mac,
-            dr[i].name[0] ? dr[i].name : "",
+            sanitizedName,
             typeStr,
             dr[i].rssi);
         p += w;
