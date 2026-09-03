@@ -13,6 +13,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <Update.h>
 #include <ctype.h>
 #include "config.h"
 #include "settings.h"
@@ -203,7 +204,7 @@ static void handleStatus() {
         "\"cams\":%s,\"pending_cams\":%s,\"scanning\":%s,"
         "\"fc\":{\"alive\":%s,\"armed\":%s,\"vbat10\":%u,\"rssi\":%u,"
         "\"cycle\":%u,\"api\":\"%s\",\"fw\":\"%s\",\"board\":\"%s\"},"
-        "\"sys\":{\"heap\":%u,\"uptime\":%lu,\"ip\":\"%s\",\"sta\":%d}}",
+        "\"sys\":{\"heap\":%u,\"uptime\":%lu,\"ip\":\"%s\",\"sta\":%d,\"version\":\"%s\"}}",
         heap,
         (int)cfg.camera, camGetName(), (int)st, kStateNames[st], batt,
         tel.recTimeSeconds, tel.dataValid ? "true" : "false", tel.model,
@@ -224,7 +225,8 @@ static void handleStatus() {
         fc.vbat10, fc.rssi / 10, fc.cycleTimeUs,
         fcApiVersion(), fcFirmwareVersion(), fcBoardName(),
         heap, millis() / 1000UL, _ipStr,
-        WiFi.softAPgetStationNum());
+        WiFi.softAPgetStationNum(),
+        FIRMWARE_VERSION);
     (void)w;  // Truncation would only clip trailing '}' — buffer sized with headroom
 
     _server.sendHeader("Cache-Control", "no-store");
@@ -578,30 +580,68 @@ static void handleScanResults() {
 
     size_t w = snprintf(p, left, "{\"scanning\":%s,\"results\":[",
                         scanResultsIsScanning() ? "true" : "false");
-    p += w;
-    left -= w;
+    p += w; left -= w;
 
-    for (uint8_t i = 0; i < dcount; i++) {
-        const char *typeStr = (dr[i].type == CAMERA_GOPRO) ? "GoPro" : "DJI Osmo";
-        
-        // Sanitize device name before sending to client (prevent XSS)
-        char sanitizedName[24] = "";
-        sanitizeDeviceName(sanitizedName, dr[i].name, sizeof(sanitizedName));
-        
-        w = snprintf(p, left,
-            "%s{\"mac\":\"%s\",\"name\":\"%s\",\"t\":\"%s\",\"r\":%d}",
-            i ? "," : "",
-            dr[i].mac,
-            sanitizedName,
-            typeStr,
-            dr[i].rssi);
-        p += w;
-        if (w >= left) break;
-        left -= w;
+    for (uint8_t i = 0; i < dcount && left > 64; i++) {
+        if (i > 0) { *p++ = ','; left--; }
+        w = snprintf(p, left, "{\"mac\":\"%s\",\"name\":\"%s\",\"type\":%u}",
+                     dr[i].mac, escJson(dr[i].name), (unsigned)dr[i].type);
+        p += w; left -= w;
     }
+    *p = '\0';
 
-    snprintf(p, left, "]}");
     _server.send(200, "application/json", buf);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// OTA Firmware Update Endpoint
+// ──────────────────────────────────────────────────────────────────────────────
+
+static void handleOtaPost() {
+    HTTPUpload& upload = _server.upload();
+    
+    if (upload.status == UPLOAD_FILE_START) {
+        Serial.printf("OTA Start: %s\n", upload.filename.c_str());
+        
+        // Check firmware header (ESP32 magic byte)
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+            Serial.printf("OTA Begin Error: %s\n", Update.errorString());
+            _server.sendHeader("Connection", "close");
+            _server.send(500, "application/json", 
+                "{\"ok\":false,\"error\":\"Begin failed: " + String(Update.errorString()) + "\"}");
+            return;
+        }
+    } 
+    else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+            Serial.printf("OTA Write Error: %s\n", Update.errorString());
+            _server.sendHeader("Connection", "close");
+            _server.send(500, "application/json",
+                "{\"ok\":false,\"error\":\"Write failed: " + String(Update.errorString()) + "\"}");
+        }
+    } 
+    else if (upload.status == UPLOAD_FILE_END) {
+        if (Update.end(true)) {
+            Serial.printf("OTA Success: %u bytes written\n", upload.totalSize);
+            _server.send(200, "application/json", 
+                "{\"ok\":true,\"message\":\"Firmware updated! Rebooting...\"}");
+            delay(1000);
+            ESP.restart();
+        } else {
+            Serial.printf("OTA End Error: %s\n", Update.errorString());
+            _server.sendHeader("Connection", "close");
+            _server.send(500, "application/json",
+                "{\"ok\":false,\"error\":\"End failed: " + String(Update.errorString()) + "\"}");
+        }
+    }
+}
+
+static void handleOtaStatus() {
+    char out[128];
+    snprintf(out, sizeof(out), 
+        "{\"ok\":true,\"version\":\"%s\",\"free_heap\":%lu}",
+        FIRMWARE_VERSION, (unsigned long)ESP.getFreeHeap());
+    _server.send(200, "application/json", out);
 }
 
 static void redirectToRoot() {
@@ -689,6 +729,8 @@ void webStart() {
     _server.on("/api/command",    HTTP_POST, handleCommand);
     _server.on("/api/msp",        HTTP_POST, handleMspPost);
     _server.on("/api/scan",       HTTP_GET,  handleScanResults);
+    _server.on("/api/ota",        HTTP_POST, handleOtaPost);
+    _server.on("/api/ota/status", HTTP_GET,  handleOtaStatus);
 
     // OS connectivity probes → answer with SUCCESS bodies (see handlers above).
     _server.on("/connecttest.txt",              HTTP_GET, handleProbeConnectTest);

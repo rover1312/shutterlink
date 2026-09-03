@@ -482,10 +482,30 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div class="grid2">
       <div class="glass kpi"><div class="lbl">Free heap</div><div class="val" id="sHeap">--</div><div class="hint">bytes available</div></div>
       <div class="glass kpi"><div class="lbl">Uptime</div><div class="val" id="sUp">--</div><div class="hint" id="sIp">&nbsp;</div></div>
+      <div class="glass kpi"><div class="lbl">Firmware</div><div class="val" id="sVer">--</div><div class="hint">ShutterLink version</div></div>
     </div>
     <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn danger" id="btnReboot">Reboot ESP32</button>
     </div>
+  </div>
+  
+  <div class="glass card">
+    <h2><svg class="ic"><use href="#i-download"/></svg>Firmware Update (OTA)</h2>
+    <p style="margin-bottom:12px;color:var(--dim)">Upload a .bin firmware file from GitHub Releases to update the ESP32. The device will reboot automatically after a successful update.</p>
+    <div class="field">
+      <label>Select firmware file (.bin)</label>
+      <input type="file" id="otaFile" accept=".bin" style="background:var(--glass2);padding:10px;border-radius:8px;border:1px solid var(--stroke);color:var(--txt);width:100%;box-sizing:border-box">
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="btn primary" id="btnOtaUpload">Upload & Update</button>
+      <div id="otaProgress" style="flex:1;display:none">
+        <div class="bar" style="height:8px;background:var(--glass2);border-radius:4px;overflow:hidden">
+          <div id="otaBar" style="height:100%;width:0%;background:var(--accent);transition:width 0.3s"></div>
+        </div>
+        <small id="otaStatus" style="display:block;margin-top:6px;color:var(--dim)">Uploading...</small>
+      </div>
+    </div>
+    <div class="note" style="margin-top:12px"><b>Warning:</b> Do not close this page or power off the device during update. If update fails, you may need to re-flash via USB.</div>
   </div>
 </section>
 
@@ -956,6 +976,76 @@ $('saveWifi').onclick=async()=>{
   }catch(e){console.error('reboot error:',e);toast('Error: '+e.message);}
 }});
 
+/* ---------- OTA Update ---------- */
+$('btnOtaUpload').onclick=async()=>{
+  const fileInput=$('otaFile');
+  const file=fileInput.files[0];
+  if(!file)return toast('Please select a .bin file first');
+  if(!file.name.endsWith('.bin'))return toast('File must be a .bin firmware file');
+  
+  const progressDiv=$('otaProgress');
+  const otaBar=$('otaBar');
+  const otaStatus=$('otaStatus');
+  
+  progressDiv.style.display='block';
+  otaBar.style.width='0%';
+  otaStatus.textContent='Uploading...';
+  
+  const formData=new FormData();
+  formData.append('firmware',file);
+  
+  try{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST','/api/ota',true);
+    
+    xhr.upload.onprogress=(e)=>{
+      if(e.lengthComputable){
+        const pct=Math.round((e.loaded/e.total)*100);
+        otaBar.style.width=pct+'%';
+        otaStatus.textContent='Uploading... '+pct+'%';
+      }
+    };
+    
+    xhr.onload=()=>{
+      if(xhr.status===200){
+        try{
+          const res=JSON.parse(xhr.responseText);
+          if(res.ok){
+            otaStatus.textContent='Success! Rebooting...';
+            otaBar.style.width='100%';
+            toast('Firmware updated! Device is rebooting...');
+            setTimeout(()=>{location.reload();},3000);
+          }else{
+            throw new Error(res.error||'Update failed');
+          }
+        }catch(e){
+          otaStatus.textContent='Error parsing response';
+          toast('Error: '+e.message);
+        }
+      }else{
+        try{
+          const res=JSON.parse(xhr.responseText);
+          throw new Error(res.error||'HTTP '+xhr.status);
+        }catch(e){
+          otaStatus.textContent='Error: HTTP '+xhr.status;
+          toast('Update failed: '+e.message);
+        }
+      }
+    };
+    
+    xhr.onerror=()=>{
+      otaStatus.textContent='Network error';
+      toast('Network error during upload');
+    };
+    
+    xhr.send(formData);
+  }catch(e){
+    console.error('OTA error:',e);
+    toast('Error: '+e.message);
+    progressDiv.style.display='none';
+  }
+};
+
 /* ---------- MSP console ---------- */
 $('mspSend').onclick=async()=>{
   try{
@@ -1061,6 +1151,7 @@ function render(){
   $('sUp').textContent=mmss(sys.uptime||0);
   $('sIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
   $('ftIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
+  $('sVer').textContent=sys.version||'v2.1';
   }catch(e){console.error('Render error:',e);}
 }
 
