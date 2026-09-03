@@ -584,8 +584,13 @@ static void handleScanResults() {
 
     for (uint8_t i = 0; i < dcount && left > 64; i++) {
         if (i > 0) { *p++ = ','; left--; }
+        
+        // Sanitize device name before sending to client (prevent XSS)
+        char sanitizedName[24] = "";
+        sanitizeDeviceName(sanitizedName, dr[i].name, sizeof(sanitizedName));
+        
         w = snprintf(p, left, "{\"mac\":\"%s\",\"name\":\"%s\",\"type\":%u}",
-                     dr[i].mac, escJson(dr[i].name), (unsigned)dr[i].type);
+                     dr[i].mac, sanitizedName, (unsigned)dr[i].type);
         p += w; left -= w;
     }
     *p = '\0';
