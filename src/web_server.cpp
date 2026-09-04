@@ -244,8 +244,11 @@ static void handleSettingsPost() {
 
     if (!jsonHas(body, "camera") && !jsonHas(body, "auxChannel") &&
         !jsonHas(body, "recordOnArm") && !jsonHas(body, "ssid") &&
-        !jsonHas(body, "slots") && !jsonHas(body, "wifiSwitch") &&
-        !jsonHas(body, "scanAll")) {
+        !jsonHas(body, "slot0") && !jsonHas(body, "slot1") &&
+        !jsonHas(body, "slot2") && !jsonHas(body, "slot3") &&
+        !jsonHas(body, "wifiSwitch") && !jsonHas(body, "scanAll") &&
+        !jsonHas(body, "threshold") && !jsonHas(body, "debounce") &&
+        !jsonHas(body, "stopOnDisarm")) {
         sendJsonError("no recognized keys");
         return;
     }
