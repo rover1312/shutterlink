@@ -525,11 +525,37 @@ if (typeof toast !== 'function') {
 'use strict';
 const $=id=>document.getElementById(id);
 let S=null;
-/* ---------- tabs ---------- */
-document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('on',x===b));
-  ['dash','ctrl','cam','osd','fc'].forEach(t=>$('tab-'+t).hidden=(t!==b.dataset.tab));
-});
+let settingsLoaded=false;
+
+/* ---------- Load initial settings on page load ---------- */
+async function loadInitialSettings(){
+  try{
+    const res=await fetch('/api/status',{cache:'no-store'});
+    if(res.ok){
+      S=await res.json();
+      settingsLoaded=true;
+      // Sync forms with loaded settings
+      const rec=S.rec||{};
+      if($('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
+      if($('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));$('lblThr').textContent=$('rngThr').value+' µs';}
+      if($('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));$('lblDeb').textContent=$('rngDeb').value+' ms';}
+      if($('swRoa'))$('swRoa').checked=!!S.roa;
+      if($('swSod')){$('swSod').disabled=!S.roa;$('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;}
+      if($('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
+      // Set brand pills based on loaded camera type
+      pendingBrand=S.cam?S.cam.type:-1;
+      $('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+      $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
+      syncScanAllToggle();
+      renderActiveCam();
+      renderCams();
+      renderDiscovered();
+      syncDiscoverUI();
+      render();
+    }
+  }catch(e){console.error('loadInitialSettings error:',e);}
+}
+loadInitialSettings();
 
 /* ---------- build channel select ---------- */
 (()=>{const s=$('selCh');
