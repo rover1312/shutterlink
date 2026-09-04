@@ -899,8 +899,20 @@ function startCooldownTicker(){
   },500);
 }
 
-$('selDji').onclick=()=>{try{pendingBrand=0;syncDiscoverUI();}catch(e){console.error(e);}};
-$('selGp').onclick=()=>{try{pendingBrand=1;syncDiscoverUI();}catch(e){console.error(e);}};
+if($('selDji'))$('selDji').onclick=()=>{try{pendingBrand=0;syncDiscoverUI();}catch(e){console.error(e);}};
+if($('selGp'))$('selGp').onclick=()=>{try{pendingBrand=1;syncDiscoverUI();}catch(e){console.error(e);}};
+
+/* ---------- Tab switching ---------- */
+document.querySelectorAll('.tabbtn').forEach(btn=>{
+  btn.onclick=()=>{
+    const tab=btn.dataset.tab;
+    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('on'));
+    document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.hidden=true);
+    btn.classList.add('on');
+    const target=$('tab-'+tab);
+    if(target)target.hidden=false;
+  };
+});
 
 /* ---------- "Show all nearby devices" toggle ---------- */
 $('scanAllToggle').onclick=async e=>{
