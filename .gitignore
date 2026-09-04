@@ -9,6 +9,7 @@ __pycache__/
 *.a
 *.out
 *.class
+.pio
 
 # Dependencies
 .venv/
