@@ -544,8 +544,8 @@ async function loadInitialSettings(){
       if($('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
       // Set brand pills based on loaded camera type
       pendingBrand=S.cam?S.cam.type:-1;
-      $('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
-      $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
+      if($('selDji'))$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+      if($('selGp'))$('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
       syncScanAllToggle();
       renderActiveCam();
       renderCams();
