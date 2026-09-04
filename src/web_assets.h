@@ -387,14 +387,11 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 <!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
   <div class="glass card">
     <h2><svg class="ic"><use href="#i-refresh"/></svg>Discover new camera</h2>
-    <div class="seg" id="discoverSeg">
-      <button id="selDji" data-brand="0"><svg class="ic"><use href="#i-aperture"/></svg>DJI Osmo Action</button>
-      <button id="selGp" data-brand="1"><svg class="ic"><use href="#i-bt"/></svg>GoPro HERO8+</button>
-    </div>
+    <p style="font-size:13px;color:var(--dim);margin-bottom:14px">Press Scan to find nearby cameras. Type is auto-detected.</p>
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <button class="btn primary" id="scanBtn" disabled>
+      <button class="btn primary" id="scanBtn">
         <svg class="ic" style="vertical-align:middle" id="scanIcon"><use href="#i-refresh"/></svg>
-        <span id="scanBtnTxt">Pick a brand first</span>
+        <span id="scanBtnTxt">Scan for Cameras</span>
       </button>
       <span id="scanCountdown" style="font-size:12px;color:var(--dim)"></span>
     </div>
@@ -716,8 +713,7 @@ $('camList').addEventListener('click',async e=>{
   }catch(e){console.error('camList click error:',e);toast('Error: '+e.message);}
 });
 
-/* ---------- discover (Card 3): brand pills + scan button + cooldown ---------- */
-let pendingBrand=-1;         // -1 = none, 0 = DJI, 1 = GoPro
+/* ---------- discover (Card 3): scan button + cooldown ---------- */
 let scanCooldownUntil=0;     // ms timestamp when the scan button re-enables
 let userScanActive=false;    // true ONLY between user click and cooldown end
 let discoveredCams=[];       // last seen discovered list from /api/scan
@@ -727,32 +723,19 @@ let scanCdTimer=null;        // setInterval that ticks the countdown UI
 
 function syncDiscoverUI(){
   try{
-    $('selDji').classList.toggle('on',pendingBrand===0);
-    $('selGp').classList.toggle('on',pendingBrand===1);
     const btn=$('scanBtn');
     const txt=$('scanBtnTxt');
     const sp=$('scanSpinner');
     const now=Date.now();
     const cdLeft=Math.max(0,Math.ceil((scanCooldownUntil-now)/1000));
 
-    // 3-step UI state machine for Discover card:
-    // State 1: No brand picked → button disabled, "Pick a brand first"
-    // State 2: Scanning (10s cooldown) → disabled, countdown, spinner (first 5s)
-    // State 3: Completed → enabled, "Show All" toggle visible
-    if(pendingBrand<0){
-      // State 1: No brand picked
-      btn.disabled=true;
-      txt.textContent='Pick a brand first';
-      sp.style.display='none';
-      $('scanAllToggle').style.display='none';
-      $('scanAllHint').style.display='none';
-      return;
-    }
-
+    // 2-step UI state machine for Discover card:
+    // State 1: Scanning (10s cooldown) → disabled, countdown, spinner (first 5s)
+    // State 2: Completed → enabled, "Show All" toggle visible
     if(userScanActive && cdLeft>0){
-      // State 2: Cooldown in progress (scan window or cooldown)
+      // State 1: Cooldown in progress (scan window or cooldown)
       btn.disabled=true;
-      txt.textContent='Scan for Cameras (Ready in '+cdLeft+'s)';
+      txt.textContent='Scanning... ('+cdLeft+'s left)';
       // Spinner only during first 5s (scan window), then hidden for remaining cooldown
       if(cdLeft > 5) sp.style.display='flex'; else sp.style.display='none';
       $('scanAllToggle').style.display='none';
@@ -763,18 +746,17 @@ function syncDiscoverUI(){
     if(userScanActive && cdLeft<=0){
       // Cooldown elapsed: re-enable for the next user click
       userScanActive=false;
-      btn.disabled=(pendingBrand<0);
-      txt.textContent=pendingBrand<0?'Pick a brand first'
-        :('Scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
+      btn.disabled=false;
+      txt.textContent='Scan for Cameras';
       sp.style.display='none';
       $('scanAllToggle').style.display='inline';
       $('scanAllHint').style.display='none';
       return;
     }
 
-    // State 3: Ready (no active scan, brand picked)
+    // State 2: Ready (no active scan)
     btn.disabled=false;
-    txt.textContent='Scan for '+(pendingBrand?'GoPro':'DJI Osmo');
+    txt.textContent='Scan for Cameras';
     sp.style.display='none';
     $('scanAllToggle').style.display='inline';
     // Show/hide hint based on S.scanAll (backend setting)
