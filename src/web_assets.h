@@ -527,6 +527,12 @@ const $=id=>document.getElementById(id);
 let S=null;
 let settingsLoaded=false;
 
+/* ---------- render helpers (must be before render() is called) ---------- */
+const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
+  SCANNING:'var(--warn)',OFF:'var(--dim)'};
+function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
+function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
+
 /* ---------- Load initial settings on page load ---------- */
 async function loadInitialSettings(){
   try{
@@ -1070,10 +1076,7 @@ $('mspSend').onclick=async()=>{
 };
 
 /* ---------- render ---------- */
-const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
-  SCANNING:'var(--warn)',OFF:'var(--dim)'};
-function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
-function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
+// ST_COLORS, chLabel, mmss already defined above to avoid hoisting issues
 
 function render(){
   try{
