@@ -387,14 +387,11 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 <!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
   <div class="glass card">
     <h2><svg class="ic"><use href="#i-refresh"/></svg>Discover new camera</h2>
-    <div class="seg" id="discoverSeg">
-      <button id="selDji" data-brand="0"><svg class="ic"><use href="#i-aperture"/></svg>DJI Osmo Action</button>
-      <button id="selGp" data-brand="1"><svg class="ic"><use href="#i-bt"/></svg>GoPro HERO8+</button>
-    </div>
+    <p style="font-size:13px;color:var(--dim);margin-bottom:14px">Press Scan to find nearby cameras. Type is auto-detected.</p>
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-      <button class="btn primary" id="scanBtn" disabled>
+      <button class="btn primary" id="scanBtn">
         <svg class="ic" style="vertical-align:middle" id="scanIcon"><use href="#i-refresh"/></svg>
-        <span id="scanBtnTxt">Pick a brand first</span>
+        <span id="scanBtnTxt">Scan for Cameras</span>
       </button>
       <span id="scanCountdown" style="font-size:12px;color:var(--dim)"></span>
     </div>
@@ -482,10 +479,30 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div class="grid2">
       <div class="glass kpi"><div class="lbl">Free heap</div><div class="val" id="sHeap">--</div><div class="hint">bytes available</div></div>
       <div class="glass kpi"><div class="lbl">Uptime</div><div class="val" id="sUp">--</div><div class="hint" id="sIp">&nbsp;</div></div>
+      <div class="glass kpi"><div class="lbl">Firmware</div><div class="val" id="sVer">--</div><div class="hint">ShutterLink version</div></div>
     </div>
     <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn danger" id="btnReboot">Reboot ESP32</button>
     </div>
+  </div>
+  
+  <div class="glass card">
+    <h2><svg class="ic"><use href="#i-download"/></svg>Firmware Update (OTA)</h2>
+    <p style="margin-bottom:12px;color:var(--dim)">Upload a .bin firmware file from GitHub Releases to update the ESP32. The device will reboot automatically after a successful update.</p>
+    <div class="field">
+      <label>Select firmware file (.bin)</label>
+      <input type="file" id="otaFile" accept=".bin" style="background:var(--glass2);padding:10px;border-radius:8px;border:1px solid var(--stroke);color:var(--txt);width:100%;box-sizing:border-box">
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="btn primary" id="btnOtaUpload">Upload & Update</button>
+      <div id="otaProgress" style="flex:1;display:none">
+        <div class="bar" style="height:8px;background:var(--glass2);border-radius:4px;overflow:hidden">
+          <div id="otaBar" style="height:100%;width:0%;background:var(--accent);transition:width 0.3s"></div>
+        </div>
+        <small id="otaStatus" style="display:block;margin-top:6px;color:var(--dim)">Uploading...</small>
+      </div>
+    </div>
+    <div class="note" style="margin-top:12px"><b>Warning:</b> Do not close this page or power off the device during update. If update fails, you may need to re-flash via USB.</div>
   </div>
 </section>
 
@@ -508,11 +525,43 @@ if (typeof toast !== 'function') {
 'use strict';
 const $=id=>document.getElementById(id);
 let S=null;
-/* ---------- tabs ---------- */
-document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('on',x===b));
-  ['dash','ctrl','cam','osd','fc'].forEach(t=>$('tab-'+t).hidden=(t!==b.dataset.tab));
-});
+let settingsLoaded=false;
+
+/* ---------- render helpers (must be before render() is called) ---------- */
+const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
+  SCANNING:'var(--warn)',OFF:'var(--dim)'};
+function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
+function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
+
+/* ---------- Load initial settings on page load ---------- */
+async function loadInitialSettings(){
+  try{
+    const res=await fetch('/api/status',{cache:'no-store'});
+    if(res.ok){
+      S=await res.json();
+      settingsLoaded=true;
+      // Sync forms with loaded settings
+      const rec=S.rec||{};
+      if($('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
+      if($('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));$('lblThr').textContent=$('rngThr').value+' µs';}
+      if($('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));$('lblDeb').textContent=$('rngDeb').value+' ms';}
+      if($('swRoa'))$('swRoa').checked=!!S.roa;
+      if($('swSod')){$('swSod').disabled=!S.roa;$('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;}
+      if($('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
+      // Set brand pills based on loaded camera type
+      pendingBrand=S.cam?S.cam.type:-1;
+      if($('selDji'))$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+      if($('selGp'))$('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
+      syncScanAllToggle();
+      renderActiveCam();
+      renderCams();
+      renderDiscovered();
+      syncDiscoverUI();
+      render();
+    }
+  }catch(e){console.error('loadInitialSettings error:',e);}
+}
+loadInitialSettings();
 
 /* ---------- build channel select ---------- */
 (()=>{const s=$('selCh');
@@ -696,8 +745,7 @@ $('camList').addEventListener('click',async e=>{
   }catch(e){console.error('camList click error:',e);toast('Error: '+e.message);}
 });
 
-/* ---------- discover (Card 3): brand pills + scan button + cooldown ---------- */
-let pendingBrand=-1;         // -1 = none, 0 = DJI, 1 = GoPro
+/* ---------- discover (Card 3): scan button + cooldown ---------- */
 let scanCooldownUntil=0;     // ms timestamp when the scan button re-enables
 let userScanActive=false;    // true ONLY between user click and cooldown end
 let discoveredCams=[];       // last seen discovered list from /api/scan
@@ -707,32 +755,19 @@ let scanCdTimer=null;        // setInterval that ticks the countdown UI
 
 function syncDiscoverUI(){
   try{
-    $('selDji').classList.toggle('on',pendingBrand===0);
-    $('selGp').classList.toggle('on',pendingBrand===1);
     const btn=$('scanBtn');
     const txt=$('scanBtnTxt');
     const sp=$('scanSpinner');
     const now=Date.now();
     const cdLeft=Math.max(0,Math.ceil((scanCooldownUntil-now)/1000));
 
-    // 3-step UI state machine for Discover card:
-    // State 1: No brand picked → button disabled, "Pick a brand first"
-    // State 2: Scanning (10s cooldown) → disabled, countdown, spinner (first 5s)
-    // State 3: Completed → enabled, "Show All" toggle visible
-    if(pendingBrand<0){
-      // State 1: No brand picked
-      btn.disabled=true;
-      txt.textContent='Pick a brand first';
-      sp.style.display='none';
-      $('scanAllToggle').style.display='none';
-      $('scanAllHint').style.display='none';
-      return;
-    }
-
+    // 2-step UI state machine for Discover card:
+    // State 1: Scanning (10s cooldown) → disabled, countdown, spinner (first 5s)
+    // State 2: Completed → enabled, "Show All" toggle visible
     if(userScanActive && cdLeft>0){
-      // State 2: Cooldown in progress (scan window or cooldown)
+      // State 1: Cooldown in progress (scan window or cooldown)
       btn.disabled=true;
-      txt.textContent='Scan for Cameras (Ready in '+cdLeft+'s)';
+      txt.textContent='Scanning... ('+cdLeft+'s left)';
       // Spinner only during first 5s (scan window), then hidden for remaining cooldown
       if(cdLeft > 5) sp.style.display='flex'; else sp.style.display='none';
       $('scanAllToggle').style.display='none';
@@ -743,18 +778,17 @@ function syncDiscoverUI(){
     if(userScanActive && cdLeft<=0){
       // Cooldown elapsed: re-enable for the next user click
       userScanActive=false;
-      btn.disabled=(pendingBrand<0);
-      txt.textContent=pendingBrand<0?'Pick a brand first'
-        :('Scan for '+(pendingBrand?'GoPro':'DJI Osmo'));
+      btn.disabled=false;
+      txt.textContent='Scan for Cameras';
       sp.style.display='none';
       $('scanAllToggle').style.display='inline';
       $('scanAllHint').style.display='none';
       return;
     }
 
-    // State 3: Ready (no active scan, brand picked)
+    // State 2: Ready (no active scan)
     btn.disabled=false;
-    txt.textContent='Scan for '+(pendingBrand?'GoPro':'DJI Osmo');
+    txt.textContent='Scan for Cameras';
     sp.style.display='none';
     $('scanAllToggle').style.display='inline';
     // Show/hide hint based on S.scanAll (backend setting)
@@ -865,8 +899,20 @@ function startCooldownTicker(){
   },500);
 }
 
-$('selDji').onclick=()=>{try{pendingBrand=0;syncDiscoverUI();}catch(e){console.error(e);}};
-$('selGp').onclick=()=>{try{pendingBrand=1;syncDiscoverUI();}catch(e){console.error(e);}};
+if($('selDji'))$('selDji').onclick=()=>{try{pendingBrand=0;syncDiscoverUI();}catch(e){console.error(e);}};
+if($('selGp'))$('selGp').onclick=()=>{try{pendingBrand=1;syncDiscoverUI();}catch(e){console.error(e);}};
+
+/* ---------- Tab switching ---------- */
+document.querySelectorAll('.tabbtn').forEach(btn=>{
+  btn.onclick=()=>{
+    const tab=btn.dataset.tab;
+    document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('on'));
+    document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.hidden=true);
+    btn.classList.add('on');
+    const target=$('tab-'+tab);
+    if(target)target.hidden=false;
+  };
+});
 
 /* ---------- "Show all nearby devices" toggle ---------- */
 $('scanAllToggle').onclick=async e=>{
@@ -956,6 +1002,76 @@ $('saveWifi').onclick=async()=>{
   }catch(e){console.error('reboot error:',e);toast('Error: '+e.message);}
 }});
 
+/* ---------- OTA Update ---------- */
+$('btnOtaUpload').onclick=async()=>{
+  const fileInput=$('otaFile');
+  const file=fileInput.files[0];
+  if(!file)return toast('Please select a .bin file first');
+  if(!file.name.endsWith('.bin'))return toast('File must be a .bin firmware file');
+  
+  const progressDiv=$('otaProgress');
+  const otaBar=$('otaBar');
+  const otaStatus=$('otaStatus');
+  
+  progressDiv.style.display='block';
+  otaBar.style.width='0%';
+  otaStatus.textContent='Uploading...';
+  
+  const formData=new FormData();
+  formData.append('firmware',file);
+  
+  try{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST','/api/ota',true);
+    
+    xhr.upload.onprogress=(e)=>{
+      if(e.lengthComputable){
+        const pct=Math.round((e.loaded/e.total)*100);
+        otaBar.style.width=pct+'%';
+        otaStatus.textContent='Uploading... '+pct+'%';
+      }
+    };
+    
+    xhr.onload=()=>{
+      if(xhr.status===200){
+        try{
+          const res=JSON.parse(xhr.responseText);
+          if(res.ok){
+            otaStatus.textContent='Success! Rebooting...';
+            otaBar.style.width='100%';
+            toast('Firmware updated! Device is rebooting...');
+            setTimeout(()=>{location.reload();},3000);
+          }else{
+            throw new Error(res.error||'Update failed');
+          }
+        }catch(e){
+          otaStatus.textContent='Error parsing response';
+          toast('Error: '+e.message);
+        }
+      }else{
+        try{
+          const res=JSON.parse(xhr.responseText);
+          throw new Error(res.error||'HTTP '+xhr.status);
+        }catch(e){
+          otaStatus.textContent='Error: HTTP '+xhr.status;
+          toast('Update failed: '+e.message);
+        }
+      }
+    };
+    
+    xhr.onerror=()=>{
+      otaStatus.textContent='Network error';
+      toast('Network error during upload');
+    };
+    
+    xhr.send(formData);
+  }catch(e){
+    console.error('OTA error:',e);
+    toast('Error: '+e.message);
+    progressDiv.style.display='none';
+  }
+};
+
 /* ---------- MSP console ---------- */
 $('mspSend').onclick=async()=>{
   try{
@@ -972,10 +1088,7 @@ $('mspSend').onclick=async()=>{
 };
 
 /* ---------- render ---------- */
-const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
-  SCANNING:'var(--warn)',OFF:'var(--dim)'};
-function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
-function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
+// ST_COLORS, chLabel, mmss already defined above to avoid hoisting issues
 
 function render(){
   try{
@@ -1061,6 +1174,7 @@ function render(){
   $('sUp').textContent=mmss(sys.uptime||0);
   $('sIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
   $('ftIp').textContent=sys.ip?('http://'+sys.ip+'/'):'';
+  $('sVer').textContent=sys.version||'v2.1';
   }catch(e){console.error('Render error:',e);}
 }
 

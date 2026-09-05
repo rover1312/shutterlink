@@ -156,6 +156,7 @@ static ShutterLinkAdvertisedDeviceCallbacks _scanCallbacks;
 static const char *DJI_NAME_PREFIXES[] = {
     "Osmo Action", "DJI Action", "OSMO ACTION", "DJI ACTION",
     "Action 2", "action2", "Action 4", "Action 5", "OsmoAction",
+    "rishavhsAction2", "RishavhsAction2", "RISHAVHSACTION2",
 };
 static const size_t DJI_NAME_PREFIX_COUNT = sizeof(DJI_NAME_PREFIXES) / sizeof(DJI_NAME_PREFIXES[0]);
 
