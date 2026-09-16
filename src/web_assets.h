@@ -135,6 +135,7 @@ input[type=range]::-moz-range-thumb{width:19px;height:19px;border-radius:50%;bac
 .btn:hover{transform:translateY(-2px);border-color:var(--hi)}
 .btn.primary{background:linear-gradient(135deg,var(--accent),#8a5cf6);border-color:transparent;color:#fff}
 .btn.danger{border-color:rgba(255,77,103,.45)}
+.btn.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);color:var(--txt)}
 .seg{display:flex;gap:8px}
 .seg button{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:15px;
   border:1px solid var(--stroke);background:var(--glass2);color:var(--dim);font-weight:700;font-size:13.5px;cursor:pointer;transition:var(--tr)}
@@ -363,7 +364,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div class="field"><label>Network name (SSID)<span id="lblSsid"></span></label>
       <input type="text" id="inSsid" maxlength="32" placeholder="ShutterLink"></div>
     <div class="field"><label>Password (8–64 chars, empty = open)</label>
-      <input type="password" id="inPass" maxlength="64" placeholder="unchanged"></div>
+      <input type="password" id="inPass" maxlength="63" placeholder="8-63 chars, required"></div>
     <button class="btn primary" id="saveWifi">Save Wi-Fi &amp; restart AP</button>
     <div class="note">Saving restarts the access point — your phone will disconnect.
       Reconnect to the new network name to continue.</div>
@@ -387,8 +388,10 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 <!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
   <div class="glass card">
     <h2><svg class="ic"><use href="#i-refresh"/></svg>Discover new camera</h2>
-    <p style="font-size:13px;color:var(--dim);margin-bottom:14px">Press Scan to find nearby cameras. Type is auto-detected.</p>
+    <p style="font-size:13px;color:var(--dim);margin-bottom:14px">Pick the brand, then press Scan to find nearby cameras. Type is auto-detected.</p>
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn" id="selDji">DJI Osmo</button>
+      <button class="btn" id="selGp">GoPro</button>
       <button class="btn primary" id="scanBtn">
         <svg class="ic" style="vertical-align:middle" id="scanIcon"><use href="#i-refresh"/></svg>
         <span id="scanBtnTxt">Scan for Cameras</span>
@@ -526,6 +529,9 @@ if (typeof toast !== 'function') {
 const $=id=>document.getElementById(id);
 let S=null;
 let settingsLoaded=false;
+// Pending brand for the Discover card: -1 = none picked yet, 0 = DJI, 1 = GoPro.
+// MUST be declared before loadInitialSettings() runs (TDZ under 'use strict').
+let pendingBrand=-1;
 
 /* ---------- render helpers (must be before render() is called) ---------- */
 const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
@@ -655,7 +661,9 @@ $('saveSlots').onclick=async()=>{
 };
 
 /* ---------- camera tab: 3 cards (active / saved / discover) ---------- */
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&','<':'<','>':'>','"':'"'}[c]));
+// Proper HTML escaping — the old map was an identity function ('<' -> '<').
+// Every innerHTML render path below depends on this for BLE-name safety.
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let lastErrorShown='';  // last backend lastError string already toasted
 
 function renderActiveCam(){
@@ -956,7 +964,9 @@ $('scanBtn').onclick=async()=>{
     // 1) If the picked brand differs from the active backend, set it
     //    first (no scan side-effect — this only changes settings.camera).
     const wantBrand = pendingBrand;
-    const curBrand  = (S&&S.cam)?S.cam.type:settingsGet()?0:0;
+    // NOTE: S.cam.type is the live backend; there is no JS settingsGet()
+    // (that name only exists in C++). Fall back to DJI (0) before first poll.
+    const curBrand  = (S&&S.cam&&S.cam.type!=null)?S.cam.type:0;
     if (curBrand !== wantBrand){
       const j = await api('/api/settings',{camera:wantBrand});
       if(!j.ok){toast('Error: '+(j.error||'?'));return;}
@@ -988,8 +998,8 @@ $('saveWifi').onclick=async()=>{
   try{
     const ssid=$('inSsid').value.trim(),pass=$('inPass').value.trim();
     if(!ssid)return toast('Enter an SSID first');
-    if(pass&&pass.length<8)return toast('Password must be empty or 8+ chars');
-    const body={ssid:ssid};if(pass)body.pass=pass;
+    if(pass.length<8||pass.length>63)return toast('Password must be 8-63 chars (WPA2)');
+    const body={ssid:ssid,pass:pass};
     const j=await api('/api/settings',body);
     if(j.ok)toast('Wi-Fi saved \u2014 AP restarting, reconnect to "'+ssid+'"');
     else toast('Error: '+(j.error||'?'));
@@ -1198,8 +1208,8 @@ async function poll(){
       // brand pills reflect the live backend brand only when user has NOT
       // already picked a pending brand.
       if(pendingBrand<0){
-        $('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
-        $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
+        if($('selDji'))$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+        if($('selGp'))$('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
       }
       renderActiveCam();
       renderCams();

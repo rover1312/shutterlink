@@ -22,9 +22,12 @@ static void applyDefaults() {
     strlcpy(_s.apSsid, WIFI_AP_DEFAULT_SSID, sizeof(_s.apSsid));
     strlcpy(_s.apPass, WIFI_AP_DEFAULT_PASS, sizeof(_s.apPass));
 
-    for (int i = 0; i < 4; i++) {
-        _s.osdSlot[i] = DEFAULT_OSD_SLOT_1 + i;
-    }
+    // Explicit per-slot defaults (do NOT assume OsdSlotContent values are
+    // contiguous — DEFAULT_OSD_SLOT_1 + i breaks if the enum ever gaps).
+    _s.osdSlot[0] = DEFAULT_OSD_SLOT_1;
+    _s.osdSlot[1] = DEFAULT_OSD_SLOT_2;
+    _s.osdSlot[2] = DEFAULT_OSD_SLOT_3;
+    _s.osdSlot[3] = DEFAULT_OSD_SLOT_4;
     _s.camCount = 0;
     memset(_s.cams, 0, sizeof(_s.cams));
 }
@@ -103,6 +106,9 @@ void settingsSave() {
 }
 
 void settingsReset() {
+    // Zeroize secrets before overwriting (don't leave old PSK in RAM).
+    memset(_s.apPass, 0, sizeof(_s.apPass));
+    memset(_s.apSsid, 0, sizeof(_s.apSsid));
     applyDefaults();
 }
 

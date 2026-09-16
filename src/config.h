@@ -35,7 +35,10 @@
 // ──────────────────────────────────────────────────────────────────────────────
 
 // Active camera backend: 0 = DJI Osmo Action, 1 = GoPro HERO8 and newer.
-#define DEFAULT_CAMERA_TYPE       CAMERA_DJI
+// NOTE: kept as a plain integer (not CAMERA_DJI) on purpose — settings.h
+// defines CameraType and includes THIS file, so referencing the enum here
+// would create a config.h <-> settings.h include cycle.
+#define DEFAULT_CAMERA_TYPE       0
 
 // Zero-based index of the RC channel used as the "Record" switch.
 // In Betaflight, AUX1 = channel 5 (index 4), AUX4 = channel 8 (index 7), etc.
@@ -64,9 +67,25 @@
 // RC channel used as a Wi-Fi on/off switch. 255 = disabled (AP always on).
 #define DEFAULT_WIFI_SWITCH_CH    255
 
-// SoftAP credentials for the Web UI (password empty = open network).
+// SoftAP credentials for the Web UI.
+// SECURITY NOTE: these are public defaults (also committed to git). They are
+// only a first-boot fallback — change them from the Web UI on first use.
+// Empty password = open network (strongly discouraged; the firmware rejects
+// empty passwords on POST and only keeps this path for recovery).
 #define WIFI_AP_DEFAULT_SSID      "ShutterLink"
 #define WIFI_AP_DEFAULT_PASS      "shutterlink"
+
+// WPA2-PSK limits enforced by the firmware (not just the UI hint).
+#define WIFI_AP_PASS_MIN_LEN      8
+#define WIFI_AP_PASS_MAX_LEN      63   // WPA2 limit (64 = hex key, unsupported)
+#define WIFI_AP_SSID_MAX_LEN      32
+
+// HTTP hardening: max JSON body accepted on POST /api/* (bytes).
+// Anything larger is rejected with 413 before heap-hungry String copies.
+#define WEB_MAX_JSON_BODY_LEN     2048
+// Minimum gap between two user discovery scans (ms) — enforced server-side
+// so a script can't hog the shared 2.4 GHz radio. UI cooldown is longer.
+#define WEB_SCAN_COOLDOWN_MS      15000
 
 // Default content of Betaflight Custom Message slots 1..4 (OsdSlotContent).
 #define DEFAULT_OSD_SLOT_1        OSD_SLOT_CAM_STATUS
@@ -138,14 +157,19 @@
 
 // Built-in LED on most ESP32-C3 dev boards (GPIO8, active LOW on DevKitM-1).
 #define STATUS_LED_PIN        8
-#define LED_ACTIVE_LOW        true   // Set to false if your LED is active HIGH
+#define LED_ACTIVE_LOW        1   // 1 = active LOW, 0 = active HIGH (use int, not bool, for #if/digitalWrite clarity)
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Debug
 // ──────────────────────────────────────────────────────────────────────────────
 
-// Uncomment to enable verbose serial debug output on Serial (USB CDC).
+// Verbose serial debug output on Serial (USB CDC).
+// Release guidance: build with -DDEBUG_DISABLED (or comment this out) to
+// silence MAC/SSID/DUML hex logs. CORE_DEBUG_LEVEL in platformio.ini should
+// be 1 (warnings) for flight builds, 3 only on the bench.
+#ifndef DEBUG_DISABLED
 #define DEBUG_ENABLED
+#endif
 
 #ifdef DEBUG_ENABLED
     #define DBG(fmt, ...)   log_printf("[%lu] " fmt "\n", millis(), ##__VA_ARGS__)

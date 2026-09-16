@@ -33,18 +33,21 @@ static void formatMmSs(uint16_t seconds, char *out, size_t len) {
 }
 
 /// Build the string for one slot into `buf` (max OSD_MAX_TEXT_LEN chars).
+/// NOTE: Takes a telemetry snapshot once per call so repeated backend reads
+/// can't tear a single slot's text (e.g. state changes mid-format).
 static void buildSlotString(uint8_t content, char *buf, size_t bufLen) {
-    const CameraTelemetry &tel = camGetTelemetry();
-    const FcTelemetry &fc = fcGetTelemetry();
+    const CameraTelemetry tel = camGetTelemetry();  // snapshot (copy)
+    const FcTelemetry fc = fcGetTelemetry();        // snapshot (copy)
+    const BleConnectionState bleState = camGetState();
 
     switch (content) {
 
         case OSD_SLOT_CAM_STATUS: {
-            if (camGetState() == BLE_DISCONNECTED ||
-                camGetState() == BLE_SCANNING) {
+            if (bleState == BLE_DISCONNECTED ||
+                bleState == BLE_SCANNING) {
                 snprintf(buf, bufLen, "%s",
-                         camGetState() == BLE_SCANNING ? "CAM SCAN" : "CAM OFF");
-            } else if (!tel.dataValid && camGetState() != BLE_CONNECTED) {
+                         bleState == BLE_SCANNING ? "CAM SCAN" : "CAM OFF");
+            } else if (!tel.dataValid && bleState != BLE_CONNECTED) {
                 snprintf(buf, bufLen, "CAM PAIR");
             } else {
                 uint16_t t = tel.recTimeSeconds;
@@ -54,8 +57,11 @@ static void buildSlotString(uint8_t content, char *buf, size_t bufLen) {
                             snprintf(buf, bufLen, "REC %u%% %02u:%02u",
                                      tel.batteryPercent, t / 60, t % 60);
                         } else {
-                            formatMmSs(t, buf, bufLen);
-                            snprintf(buf, bufLen, "REC %s", buf);
+                            // NOTE: must use a temp buffer — snprintf() with
+                            // overlapping src/dst is undefined behaviour.
+                            char timeBuf[8];
+                            formatMmSs(t, timeBuf, sizeof(timeBuf));
+                            snprintf(buf, bufLen, "REC %s", timeBuf);
                         }
                         break;
                     case CAM_STATE_STANDBY:
@@ -90,7 +96,7 @@ static void buildSlotString(uint8_t content, char *buf, size_t bufLen) {
         }
 
         case OSD_SLOT_LINK: {
-            switch (camGetState()) {
+            switch (bleState) {
                 case BLE_CONNECTED:     snprintf(buf, bufLen, "LINK READY"); break;
                 case BLE_AUTHENTICATING:snprintf(buf, bufLen, "LINK PAIR"); break;
                 case BLE_CONNECTING:    snprintf(buf, bufLen, "LINK CONN"); break;

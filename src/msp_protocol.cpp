@@ -195,6 +195,15 @@ void mspSendRequest(uint8_t cmdId) {
 void mspSendV2Command(uint16_t cmdId, const uint8_t *payload, uint16_t payloadLen) {
     if (!_fcSerial) return;
 
+    // Security/robustness: bound the payload to our stack buffer so a future
+    // caller can't overflow `buf` via memcpy. Today only mspSendSetText()
+    // calls this (max 18 bytes), but the guard makes the API safe by default.
+    if (payloadLen > MSP_MAX_PAYLOAD_SIZE) {
+        DBG("MSP: v2 payload %u exceeds max %u — dropped", payloadLen,
+            MSP_MAX_PAYLOAD_SIZE);
+        return;
+    }
+
     // CRC region = flag(1) + cmd(2) + size(2) + payload(payloadLen)
     uint16_t crcRegionLen = 5 + payloadLen;
     uint8_t buf[3 + MSP_MAX_PAYLOAD_SIZE + 6];
@@ -250,7 +259,7 @@ void mspSendSetText(uint8_t textType, const char *text) {
 uint16_t mspGetRcChannel(const MspMessage &msg, uint8_t channelIndex) {
     // Each channel is 2 bytes (uint16 LE).  MSP_RC payload = N channels × 2.
     uint8_t offset = channelIndex * 2;
-    if (offset + 1 >= msg.payloadSize) {
+    if (offset + 2 > msg.payloadSize) {
         return 0;  // Channel index out of range for this response.
     }
     return (uint16_t)msg.payload[offset] | ((uint16_t)msg.payload[offset + 1] << 8);

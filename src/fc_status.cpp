@@ -11,6 +11,21 @@
 #include "fc_status.h"
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Timing + protocol constants (was inline magic numbers — named for readability)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// No MSP traffic for this long => link considered lost (identity re-discovery).
+static const uint32_t kFcLinkLostMs = 5000;
+// Last MSP frame within this window => FC marked alive for OSD / record-on-arm.
+static const uint32_t kFcAliveWindowMs = 2000;
+// Gap between one-shot identity requests at boot.
+static const uint32_t kIdentityStepGapMs = 300;
+// MSP_STATUS minimum: cycle(2) + i2cErr(2) + sensors(2) + flags(4) + profile(1).
+static const uint8_t kMspStatusMinLen = 11;
+// MSP_ANALOG minimum: vbat(1) + mAh(2) + rssi(2).
+static const uint8_t kMspAnalogMinLen = 5;
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Internal state
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -70,7 +85,7 @@ void fcStatusFeed(const MspMessage &msg) {
 
         case MSP_STATUS: {
             // cycleTime u16 | i2cErrors u16 | sensors u16 | flags u32 | profile u8
-            if (msg.payloadSize < 11) break;
+            if (msg.payloadSize < kMspStatusMinLen) break;
             _fc.cycleTimeUs = mspReadU16(msg, 0);
             uint32_t flags  = mspReadU32(msg, 6);
 
@@ -85,7 +100,7 @@ void fcStatusFeed(const MspMessage &msg) {
 
         case MSP_ANALOG: {
             // vbat u8 (0.1 V units) | mAhDrawn u16 | rssi u16 | amperage i16
-            if (msg.payloadSize < 5) break;
+            if (msg.payloadSize < kMspAnalogMinLen) break;
             _fc.vbat10 = msg.payload[0];
             _fc.rssi   = mspReadU16(msg, 3);
             break;
@@ -156,8 +171,11 @@ void fcStatusFeed(const MspMessage &msg) {
 void fcStatusUpdate() {
     uint32_t now = millis();
 
-    // Detect FC link loss: no MSP traffic for > 5 seconds
-    bool fcLinkLost = (_lastMspRxTime != 0 && (now - _lastMspRxTime) > 5000);
+    // Detect FC link loss: no MSP traffic for > kFcLinkLostMs.
+    // NOTE: we keep the last-known identity strings on screen instead of
+    // wiping them — wiping causes Dashboard flicker on brief UART glitches.
+    // Only the discovery state machine resets so a rebooted FC is re-queried.
+    bool fcLinkLost = (_lastMspRxTime != 0 && (now - _lastMspRxTime) > kFcLinkLostMs);
     
     // Auto-reset identity discovery if FC reboots or link is lost
     if (fcLinkLost && _identityDone) {
@@ -166,20 +184,18 @@ void fcStatusUpdate() {
         _identityStep      = 0;
         _armBitIndex       = -1;
         _lastIdentityReq   = 0;
-        memset(_apiVersion, 0, sizeof(_apiVersion));
-        memset(_variant, 0, sizeof(_variant));
-        memset(_fwVersion, 0, sizeof(_fwVersion));
-        memset(_boardName, 0, sizeof(_boardName));
+        // Deliberately NOT clearing _apiVersion/_variant/_fwVersion/_boardName
+        // here — stale-but-labelled data beats a flashing empty Dashboard.
     }
 
-    _fc.fcAlive = (_lastMspRxTime != 0 && (now - _lastMspRxTime) <= 2000);
+    _fc.fcAlive = (_lastMspRxTime != 0 && (now - _lastMspRxTime) <= kFcAliveWindowMs);
 
     // Staggered identity queries during the first seconds after boot.
     if (!_identityDone) {
         static const uint8_t kIdentityCmds[] = {
             MSP_API_VERSION, MSP_FC_VARIANT, MSP_FC_VERSION, MSP_BOARD_INFO
         };
-        if (now - _lastIdentityReq >= 300) {
+        if (now - _lastIdentityReq >= kIdentityStepGapMs) {
             _lastIdentityReq = now;
             mspSendRequest(kIdentityCmds[_identityStep]);
             if (++_identityStep >= sizeof(kIdentityCmds)) {

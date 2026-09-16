@@ -156,7 +156,10 @@ static ShutterLinkAdvertisedDeviceCallbacks _scanCallbacks;
 static const char *DJI_NAME_PREFIXES[] = {
     "Osmo Action", "DJI Action", "OSMO ACTION", "DJI ACTION",
     "Action 2", "action2", "Action 4", "Action 5", "OsmoAction",
-    "rishavhsAction2", "RishavhsAction2", "RISHAVHSACTION2",
+    // NOTE: personal device names (e.g. a developer's renamed camera) were
+    // removed here on purpose — matching must stay generic so one user's
+    // rename can't cause another user's mis-pair. Use scanAll mode to find
+    // renamed cameras by RSSI instead.
 };
 static const size_t DJI_NAME_PREFIX_COUNT = sizeof(DJI_NAME_PREFIXES) / sizeof(DJI_NAME_PREFIXES[0]);
 
