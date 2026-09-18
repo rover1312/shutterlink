@@ -343,24 +343,27 @@ static bool writeCommand(const uint8_t *data, size_t len) {
     return false;
 }
 
-static void sendShutter(bool on) {
+static bool sendShutter(bool on) {
     // Encoded JSON payloads per Open GoPro data protocol.
     static const char SHUTTER_ON[]  = "{%230%22shutter%22%3Atrue}";
     static const char SHUTTER_OFF[] = "{%230%22shutter%22%3Afalse}";
 
     const char *payload = on ? SHUTTER_ON : SHUTTER_OFF;
-    uint8_t plen = strlen(payload);
+    size_t plen = strlen(payload);
 
+    // V05: no backing for unchecked copy (fixed strings safe today, fragile on edit).
     uint8_t frame[40];
+    if (plen + 2 > sizeof(frame)) return false;
     frame[0] = 0x03;         // Command request header
-    frame[1] = plen;
+    frame[1] = (uint8_t)plen;
     memcpy(&frame[2], payload, plen);
 
     if (writeCommand(frame, plen + 2)) {
         DBG("GP: Sent shutter=%s", on ? "ON" : "OFF");
-    } else {
-        DBG("GP: Failed to send shutter command");
+        return true;
     }
+    DBG("GP: Failed to send shutter command");
+    return false;
 }
 
 static void sendKeepAlive() {
@@ -480,6 +483,12 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
 // ──────────────────────────────────────────────────────────────────────────────
 
 void gpInit() {
+    // H06-partial: same reclaim as djiInit (see above).
+    if (_pClient && !_pClient->isConnected()) {
+        NimBLEDevice::deleteClient(_pClient);
+        _pClient = nullptr;
+        _pCommandChar = _pSettingsChar = _pQueryChar = nullptr;
+    }
     DBG("GP: Backend ready");
     _bleState = BLE_DISCONNECTED;
     _telemetry = CameraTelemetry();
@@ -567,14 +576,14 @@ void gpUpdate() {
 
 bool gpSendStartRecord() {
     if (_bleState != BLE_CONNECTED) return false;
-    sendShutter(true);
-    return true;
+    // V07: must propagate write result (was always true — no backing, oversight).
+    // Recorder relies on false to keep _pendingCmd for retry after reconnect.
+    return sendShutter(true);
 }
 
 bool gpSendStopRecord() {
     if (_bleState != BLE_CONNECTED) return false;
-    sendShutter(false);
-    return true;
+    return sendShutter(false);
 }
 
 BleConnectionState gpGetState() { return _bleState; }

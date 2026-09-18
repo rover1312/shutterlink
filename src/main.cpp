@@ -124,7 +124,7 @@ static void mspPollRC() {
 }
 
 static void mspReadIncoming() {
-    MspMessage msg;
+    MspMessage msg{};  // E13: zero-init (no backing for uninit; fail-closed)
 
     // Drain the UART buffer byte-by-byte into the MSP parser, but with a
     // per-loop budget so a burst of FC traffic can't starve everything else.

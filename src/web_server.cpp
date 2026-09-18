@@ -628,7 +628,7 @@ static void handleMspPost() {
 
     mspSendRequest((uint8_t)cmd);
 
-    MspMessage msg;
+    MspMessage msg{};  // E13: zero-init (no backing for uninit)
     uint32_t started = millis();
     bool got = false;
     while (millis() - started < MSP_RESPONSE_TIMEOUT_MS) {

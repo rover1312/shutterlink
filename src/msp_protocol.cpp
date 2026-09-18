@@ -183,7 +183,8 @@ void mspSendRequest(uint8_t cmdId) {
     frame[5] = 0 ^ cmdId;             // CRC = size ^ cmd (size is 0)
 
     _fcSerial->write(frame, 6);
-    _fcSerial->flush();  // Ensure the bytes are sent immediately
+    // No flush: UART FIFO drains async. flush() blocks loop() ~0.5ms per poll
+    // for no benefit (E08: original flush had no backing beyond caution).
     
     DBG("MSP: sent request CMD=%u", cmdId);
 }
@@ -229,7 +230,7 @@ void mspSendV2Command(uint16_t cmdId, const uint8_t *payload, uint16_t payloadLe
     buf[3 + crcRegionLen] = crc;
 
     _fcSerial->write(buf, 3 + crcRegionLen + 1);
-    _fcSerial->flush();
+    // No flush (see mspSendRequest E08).
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -59,7 +59,7 @@ static bool    isDjiDevice(NimBLEAdvertisedDevice *device);
 static void    sendPairingArm();
 static void    sendSetPairingPIN();
 static void    sendKeepAlive();
-static size_t  buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver,
+static size_t  buildDumlPacket(uint8_t *buffer, size_t bufCap, uint8_t sender, uint8_t receiver,
                                uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
                                const uint8_t *payload, size_t payloadLen);
 static uint8_t  crc8_dji(const uint8_t *data, size_t len);
@@ -377,11 +377,14 @@ static uint16_t crc16_dji(const uint8_t *data, size_t len) {
     return crc;
 }
 
-static size_t buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver,
-                              uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
-                              const uint8_t *payload, size_t payloadLen) {
-    size_t idx = 0;
+static size_t buildDumlPacket(uint8_t *buffer, size_t bufCap, uint8_t sender, uint8_t receiver,
+                               uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
+                               const uint8_t *payload, size_t payloadLen) {
+    // V01: no backing for unchecked write (initial reverse-engineering oversight).
+    // DUML frames here are <= 13 + 32 = 45B; reject anything that won't fit.
     uint16_t totalLen = 13 + payloadLen;
+    if (totalLen > bufCap || totalLen > 64) return 0;
+    size_t idx = 0;
 
     buffer[idx++] = 0x55;
     buffer[idx++] = totalLen & 0xFF;
@@ -453,8 +456,9 @@ static void sendSetPairingPIN() {
     pIdx += strlen(pin);
 
     // Target: App (0x02) -> WiFi (0x07). Type: flags=0x40, set=0x07, id=0x45
-    size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++,
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x07, _sequenceCounter++,
                                  0x40, 0x07, 0x45, payload, pIdx);
+    if (!len) return;  // V01 guard: never send truncated packet
 
     // MUST use Write-Without-Response (false) on FFF5
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
@@ -467,8 +471,9 @@ static void sendKeepAlive() {
     // Send a generic ping to keep the link alive
     uint8_t packet[32];
     uint8_t payload[] = {0x00};
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x00, 0xF1, payload, 1);
+    if (!len) return;
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
     }
@@ -527,9 +532,9 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
         // Send ACK back: flags=0xC0, set=0x07, id=0x46, payload=0x00
         uint8_t packet[16];
         uint8_t payload[] = {0x00};
-        size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++,
+        size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x07, _sequenceCounter++,
                                      0xC0, 0x07, 0x46, payload, 1);
-        if (_pControlChar && _pControlChar->canWriteNoResponse()) {
+        if (len && _pControlChar && _pControlChar->canWriteNoResponse()) {
             _pControlChar->writeValue(packet, len, false);
         }
     }
@@ -562,6 +567,13 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
 // Public API
 // ──────────────────────────────────────────────────────────────────────────────
 void djiInit() {
+    // H06-partial: reclaim a dead client on backend switch (disconnect-only
+    // leaked NimBLEClient; delete only when disconnected — never while in use).
+    if (_pClient && !_pClient->isConnected()) {
+        NimBLEDevice::deleteClient(_pClient);
+        _pClient = nullptr;
+        _pControlChar = _pTelemetryChar = _pAuthChar = nullptr;
+    }
     DBG("DJI: Backend ready (NimBLE stack shared)");
     _bleState = BLE_DISCONNECTED;
     _telemetry = CameraTelemetry();
@@ -662,12 +674,14 @@ bool djiSendStartRecord() {
     // Osmo Action family record control: CmdSet 0x02 (camera control),
     // CmdId 0x02 (record), payload 0x01 = start. Verified against the
     // Osmosis project's DUML captures (MEDIA_PROTOCOL.md §11/§12).
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
+    // V02: old comment said 0x0A/0x0D (drift, no backing) — corrected.
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x02, 0x02, payload, sizeof(payload));
+    if (!len) return false;
 
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
-        DBG("DJI: Sent Start Record (0x0A/0x0D) to FFF5");
+        DBG("DJI: Sent Start Record (0x02/0x02) to FFF5");
         return true;
     }
     return false;
@@ -681,12 +695,13 @@ bool djiSendStopRecord() {
 
     // Osmo Action family record control: CmdSet 0x02, CmdId 0x02,
     // payload 0x00 = stop (see MEDIA_PROTOCOL.md §12).
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x02, 0x02, payload, sizeof(payload));
+    if (!len) return false;
 
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
-        DBG("DJI: Sent Stop Record (0x0A/0x0D) to FFF5");
+        DBG("DJI: Sent Stop Record (0x02/0x02) to FFF5");
         return true;
     }
     return false;
