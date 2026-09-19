@@ -9,6 +9,7 @@
 #include "cam_registry.h"
 #include "scan_results.h"
 #include "settings.h"
+#include "camera_manager.h"
 #include <NimBLEDevice.h>
 // ──────────────────────────────────────────────────────────────────────────────
 // DJI GATT UUIDs
@@ -259,6 +260,7 @@ static void scanCompleteCb(NimBLEScanResults results) {
 
 void djiStartScan() {
     if (_bleState == BLE_SCANNING) return;
+    if (camIsOtaQuiet()) return;  // OTA owns the radio — refuse new scans
     DBG("DJI: Starting 5s scan (40%% duty cycle)...");
     _bleState     = BLE_SCANNING;
     _doConnect    = false;
@@ -624,6 +626,9 @@ void djiUpdate() {
 
     switch (_bleState) {
         case BLE_DISCONNECTED:
+            // OTA quiet: full radio to WiFi — defer direct-connect until clear.
+            // _doConnect stays set and runs on the first tick after resume.
+            if (camIsOtaQuiet()) break;
             // A pending direct-connect (Web UI "Use" / camKick) must be
             // honoured immediately — don't wait out the reconnect interval,
             // and never let startScan() clobber the request.
@@ -651,6 +656,7 @@ void djiUpdate() {
             break;
 
         case BLE_SCANNING:
+            if (camIsOtaQuiet()) break;  // let the stopped scan settle
             if (_doConnect) {
                 connectToCamera();
                 _doConnect = false;
@@ -690,7 +696,8 @@ void djiUpdate() {
             // constantly (~1 Hz GeneralStatus and up).  If nothing arrives
             // for a long while the link is wedged even if the BLE stack
             // hasn't noticed yet — force a reconnect.
-            if (now - _lastRxMs >= DJI_LINK_STALE_MS) {
+            // Paused during OTA quiet (keep-alives are intentionally held).
+            if (!camIsOtaQuiet() && now - _lastRxMs >= DJI_LINK_STALE_MS) {
                 DBG("DJI: No camera traffic for %d s — forcing reconnect",
                     DJI_LINK_STALE_MS / 1000);
                 _pClient->disconnect();
@@ -699,7 +706,10 @@ void djiUpdate() {
             }
             if (now - _lastKeepAlive >= BLE_KEEPALIVE_INTERVAL_MS) {
                 _lastKeepAlive = now;
-                sendKeepAlive();
+                // OTA quiet: skip keep-alive so the upload TCP stream is not
+                // preempted. Stale-watchdog is also paused below; the link
+                // resumes (or cleanly reconnects) after reboot/resume.
+                if (!camIsOtaQuiet()) sendKeepAlive();
             }
             // Local rec-time clock while our START is active (see header note:
             // camera gives no decoded rec-time field, so count from accepted

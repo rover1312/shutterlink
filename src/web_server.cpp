@@ -740,11 +740,15 @@ static void handleOtaUpload() {
         _otaBytes = 0;
         _otaMaxBytes = ESP.getFreeSketchSpace();
         Serial.printf("OTA Start: %s\n", upload.filename.c_str());
+        // Give the upload full radio: stop BLE scans, pause reconnects and
+        // keep-alives until END/ABORT/response (see camera_manager quiet).
+        camSetOtaQuiet(true);
 
         if (_otaMaxBytes == 0) {
             snprintf(_otaError, sizeof(_otaError), "no space for update");
             Update.abort();
             _otaActive = false;
+            camSetOtaQuiet(false);
             return;
         }
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
@@ -752,6 +756,7 @@ static void handleOtaUpload() {
             Serial.printf("OTA Begin Error: %s\n", Update.errorString());
             Update.abort();
             _otaActive = false;
+            camSetOtaQuiet(false);
         }
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         if (!_otaActive) return;  // begin already failed — drain silently
@@ -760,6 +765,7 @@ static void handleOtaUpload() {
             snprintf(_otaError, sizeof(_otaError), "image too large");
             Update.abort();
             _otaActive = false;
+            camSetOtaQuiet(false);
             return;
         }
         if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
@@ -767,6 +773,7 @@ static void handleOtaUpload() {
             Serial.printf("OTA Write Error: %s\n", Update.errorString());
             Update.abort();
             _otaActive = false;
+            camSetOtaQuiet(false);
         } else {
             _otaBytes += upload.currentSize;
         }
@@ -774,15 +781,18 @@ static void handleOtaUpload() {
         if (_otaActive && Update.end(true)) {
             Serial.printf("OTA Success: %u bytes written\n", upload.totalSize);
             _otaOk = true;
+            // Keep quiet through the reboot in handleOtaResponse.
         } else {
             if (!_otaError[0]) snprintf(_otaError, sizeof(_otaError), "End failed");
             Serial.printf("OTA End Error: %s\n", Update.errorString());
             Update.abort();
             _otaActive = false;
+            camSetOtaQuiet(false);
         }
     } else if (upload.status == UPLOAD_FILE_ABORTED) {
         Update.abort();
         _otaActive = false;
+        camSetOtaQuiet(false);
         snprintf(_otaError, sizeof(_otaError), "upload aborted");
     }
 }
@@ -800,6 +810,7 @@ static void handleOtaResponse() {
         snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"%s\"}",
                  _otaError[0] ? _otaError : "update failed");
         _otaError[0] = '\0';
+        camSetOtaQuiet(false);  // failed update: resume BLE activity
         _server.send(500, "application/json", out);
     }
 }

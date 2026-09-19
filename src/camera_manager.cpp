@@ -65,6 +65,27 @@ static void initMutexes() {
 
 static bool _stackReady = false;
 
+// OTA radio-quiet: when true the shared 2.4GHz radio belongs to WiFi.
+// Backends check camIsOtaQuiet() before any scan/reconnect/keep-alive.
+static bool _otaQuiet = false;
+
+void camSetOtaQuiet(bool quiet) {
+    _otaQuiet = quiet;
+    if (quiet) {
+        // Stop any in-progress discovery scan immediately so beacons +
+        // the OTA TCP stream get full airtime. Existing BLE *connection*
+        // is kept (dropping it would lose the bond session); only new
+        // radio activity is suppressed — see dji/gopro update guards.
+        NimBLEScan *pScan = NimBLEDevice::getScan();
+        if (pScan && pScan->isScanning()) pScan->stop();
+        DBG("CAM: OTA quiet ON — BLE scan stopped, reconnect paused");
+    } else {
+        DBG("CAM: OTA quiet OFF — BLE activity resumed");
+    }
+}
+
+bool camIsOtaQuiet() { return _otaQuiet; }
+
 static void shutdownActiveBackend() {
     // Stop any scan and drop the current BLE connection before switching.
     NimBLEScan *pScan = NimBLEDevice::getScan();

@@ -33,6 +33,7 @@
 #include "cam_registry.h"
 #include "scan_results.h"
 #include "settings.h"
+#include "camera_manager.h"
 #include <NimBLEDevice.h>
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -218,6 +219,7 @@ static void scanCompleteCb(NimBLEScanResults results) {
 
 void gpStartScan() {
     if (_bleState == BLE_SCANNING) return;
+    if (camIsOtaQuiet()) return;  // OTA owns the radio — refuse new scans
     DBG("GP: Starting 5s scan (40%% duty cycle)...");
     _bleState  = BLE_SCANNING;
     _doConnect = false;
@@ -500,6 +502,8 @@ void gpUpdate() {
 
     switch (_bleState) {
         case BLE_DISCONNECTED:
+            // OTA quiet: full radio to WiFi — defer direct-connect until clear.
+            if (camIsOtaQuiet()) break;
             // Honour pending direct-connect (Web UI "Use" / camKick) at once
             // instead of stalling until the next scan interval.
             if (_doConnect) {
@@ -526,6 +530,7 @@ void gpUpdate() {
             break;
 
         case BLE_SCANNING:
+            if (camIsOtaQuiet()) break;  // let the stopped scan settle
             if (_doConnect) {
                 connectToCamera();
                 _doConnect = false;
@@ -555,9 +560,11 @@ void gpUpdate() {
             }
 
             // Keep-alive every ~3 s (Open GoPro best practice).
+            // Skipped during OTA quiet so the upload TCP stream is not
+            // preempted (link resumes after reboot/resume).
             if (now - _lastKeepAlive >= GOPRO_KEEPALIVE_INTERVAL_MS) {
                 _lastKeepAlive = now;
-                sendKeepAlive();
+                if (!camIsOtaQuiet()) sendKeepAlive();
             }
 
             // Re-register + poll statuses shortly after connecting (the first
