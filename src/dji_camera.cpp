@@ -42,6 +42,16 @@ static uint32_t _pairingArmedTime     = 0;
 static uint32_t _authStartMs          = 0;   // When pairing handshake began
 static uint32_t _lastRxMs             = 0;   // Last inbound DUML notification
 
+// Local record clock (mirrors GoPro backend): the Action 2 does not report
+// rec-time in a decoded field yet, so we count from our own accepted START.
+// Honest because commands are absolute start/stop with camera ACK.
+static uint32_t _recStartMs           = 0;
+static bool     _recActive            = false;
+// Last command direction, so an ACK (reply 0x00) confirms the right state.
+static bool     _lastCmdWasStart      = false;
+// Last unknown-telemetry hex (for battery decode captures, see below).
+static char     _lastTeleHex[96]      = "";
+
 // User-facing error from the last connect attempt. Surfaced through
 // /api/status → UI toast. Empty string = no error.
 static char _lastError[48] = "";
@@ -81,6 +91,8 @@ class ShutterLinkClientCallbacks : public NimBLEClientCallbacks {
         _pAuthChar      = nullptr;
         _telemetry.dataValid = false;
         _telemetry.state     = CAM_STATE_UNKNOWN;
+        _recActive = false;
+        _recStartMs = 0;
     }
 };
 static ShutterLinkClientCallbacks _clientCallbacks;
@@ -546,7 +558,18 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
     if (flags == 0xC0 && cmdSet == 0x02 && cmdId == 0x02 && length >= 12) {
         uint8_t reply = pData[11];
         switch (reply) {
-            case 0x00: DBG("DJI: record command OK"); break;
+            case 0x00:
+                DBG("DJI: record command OK");
+                // Confirm local state from our last command direction.
+                _telemetry.state = _lastCmdWasStart ? CAM_STATE_RECORDING : CAM_STATE_STANDBY;
+                _telemetry.dataValid = true;
+                if (_lastCmdWasStart && !_recActive) {
+                    _recActive = true;
+                    _recStartMs = millis();
+                } else if (!_lastCmdWasStart) {
+                    _recActive = false;
+                }
+                break;
             case 0xd8: DBG("DJI: record cmd: resource not ready"); break;
             case 0xd9: DBG("DJI: record cmd: wrong state (already rec?)"); break;
             case 0xdf: DBG("DJI: record cmd: wrong parameter"); break;
@@ -559,7 +582,21 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
     // Unsolicited Telemetry (flags=0x00)
     if (flags == 0x00) {
         _telemetry.dataValid = true;
-        // Basic parsing can be added here once we see the exact telemetry CmdSet/Id
+        // Battery decode: Action 2 DUML battery offset is NOT confirmed yet,
+        // so we deliberately do NOT guess (a wrong % is worse than "--").
+        // Capture helper: stash full hex of the latest telemetry frame for
+        // serial + future /api/status raw field. To decode your unit, leave
+        // USB logs on, note the camera's on-screen % at 2-3 levels, and send
+        // the matching `TELE` lines — the offset that tracks the screen is
+        // the battery byte.
+        {
+            size_t o = 0;
+            _lastTeleHex[0] = '\0';
+            for (size_t i = 0; i < length && i < 30 && o < sizeof(_lastTeleHex) - 4; i++) {
+                o += snprintf(_lastTeleHex + o, sizeof(_lastTeleHex) - o, "%02X ", pData[i]);
+            }
+            DBG("DJI: TELE set=0x%02X id=0x%02X len=%d %s", cmdSet, cmdId, length, _lastTeleHex);
+        }
     }
 }
 
@@ -577,6 +614,9 @@ void djiInit() {
     DBG("DJI: Backend ready (NimBLE stack shared)");
     _bleState = BLE_DISCONNECTED;
     _telemetry = CameraTelemetry();
+    _recActive = false;
+    _recStartMs = 0;
+    _lastTeleHex[0] = '\0';
 }
 
 void djiUpdate() {
@@ -661,6 +701,14 @@ void djiUpdate() {
                 _lastKeepAlive = now;
                 sendKeepAlive();
             }
+            // Local rec-time clock while our START is active (see header note:
+            // camera gives no decoded rec-time field, so count from accepted
+            // command like the GoPro backend does).
+            if (_recActive) {
+                _telemetry.recTimeSeconds = (now - _recStartMs) / 1000;
+                _telemetry.state = CAM_STATE_RECORDING;
+                _telemetry.dataValid = true;
+            }
             break;
     }
 }
@@ -682,6 +730,13 @@ bool djiSendStartRecord() {
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
         DBG("DJI: Sent Start Record (0x02/0x02) to FFF5");
+        // Optimistic local state (confirmed by ACK in notifyCallback):
+        // without this the OSD/dashboard stay UNKNOWN until the ACK arrives.
+        _lastCmdWasStart = true;
+        _recActive = true;
+        _recStartMs = millis();
+        _telemetry.state = CAM_STATE_RECORDING;
+        _telemetry.dataValid = true;
         return true;
     }
     return false;
@@ -702,6 +757,10 @@ bool djiSendStopRecord() {
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
         DBG("DJI: Sent Stop Record (0x02/0x02) to FFF5");
+        _lastCmdWasStart = false;
+        _recActive = false;
+        _telemetry.state = CAM_STATE_STANDBY;
+        _telemetry.dataValid = true;
         return true;
     }
     return false;

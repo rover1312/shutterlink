@@ -72,7 +72,12 @@ static void buildSlotString(uint8_t content, char *buf, size_t bufLen) {
                         }
                         break;
                     default:
-                        snprintf(buf, bufLen, "CAM ???");
+                        // Telemetry unknown but link is up (typical for DJI —
+                        // battery/state parse is still experimental, and GoPro
+                        // before first status notify). Show READY, not "???",
+                        // so the OSD/dashboard read as connected. BAT/REC slots
+                        // honestly keep showing "--" until real values arrive.
+                        snprintf(buf, bufLen, "CAM READY");
                         break;
                 }
             }

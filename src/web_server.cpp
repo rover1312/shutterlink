@@ -257,7 +257,7 @@ static void handleStatus() {
         "\"cam\":{\"type\":%d,\"name\":\"%s\",\"state\":%d,"
         "\"stateName\":\"%s\",\"batt\":%d,\"recTime\":%u,\"valid\":%s,"
         "\"model\":\"%s\"},"
-        "\"rec\":{\"desired\":%s,\"switchOn\":%s,\"roa\":%s,\"rcValue\":%u,"
+        "\"rec\":{\"desired\":%s,\"switchOn\":%s,\"roa\":%s,\"sod\":%s,\"rcValue\":%u,"
         "\"auxCh\":%u,\"thr\":%u,\"deb\":%u},"
         "\"slots\":[%d,%d,%d,%d],"
         "\"osd\":[\"%s\",\"%s\",\"%s\",\"%s\"],"
@@ -273,6 +273,7 @@ static void handleStatus() {
         recorderDesiredRecording() ? "true" : "false",
         recorderSwitchOn() ? "true" : "false",
         cfg.recordOnArm ? "true" : "false",
+        cfg.stopOnDisarm ? "true" : "false",
         recorderLastRcValue(),
         cfg.auxChannelIndex, cfg.rcThresholdUs, cfg.debounceMs,
         cfg.osdSlot[0], cfg.osdSlot[1], cfg.osdSlot[2], cfg.osdSlot[3],

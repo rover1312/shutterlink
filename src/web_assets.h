@@ -539,6 +539,9 @@ const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)
 function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
 function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
 
+// Last server-confirmed behaviour toggles. Same snap-back guard as slots:
+// poll must not clobber an unsaved checkbox edit.
+let lastSyncedRoa=null,lastSyncedSod=null;
 /* ---------- Load initial settings on page load ---------- */
 async function loadInitialSettings(){
   try{
@@ -551,9 +554,16 @@ async function loadInitialSettings(){
       if($('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
       if($('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));$('lblThr').textContent=$('rngThr').value+' µs';}
       if($('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));$('lblDeb').textContent=$('rngDeb').value+' ms';}
-      if($('swRoa'))$('swRoa').checked=!!S.roa;
-      if($('swSod')){$('swSod').disabled=!S.roa;$('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;}
+      if($('swRoa'))$('swRoa').checked=!!rec.roa;
+      if($('swSod')){$('swSod').checked=!!rec.sod;$('swSod').disabled=!rec.roa;$('swSod').parentElement.parentElement.style.opacity=rec.roa?1:.55;}
+      lastSyncedRoa=!!rec.roa;lastSyncedSod=!!rec.sod;
       if($('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
+      // Local toggle: enabling RoA immediately enables Stop-on-disarm control
+      // (don't wait 1.5s for the next poll to unlock it).
+      if($('swRoa')&&!$('swRoa').onchange)$('swRoa').onchange=()=>{
+        const on=$('swRoa').checked;
+        if($('swSod')){$('swSod').disabled=!on;$('swSod').parentElement.parentElement.style.opacity=on?1:.55;}
+      };
       // Set brand pills based on loaded camera type
       pendingBrand=S.cam?S.cam.type:-1;
       if($('selDji'))$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
@@ -591,6 +601,10 @@ $('selWifiCh').onchange=async()=>{
 
 /* ---------- build OSD slot rows ---------- */
 const SLOT_NAMES=['Off','Cam status','Rec time','Battery','Link state','FC battery','Arm state'];
+// Last server-confirmed slot config. render() only writes sel.value when the
+// server value actually changed — otherwise a 1.5s poll would clobber the
+// user's unsaved edit (the "CM1 snaps back" bug) before Save is pressed.
+let lastSyncedSlots=[-1,-1,-1,-1];
 (()=>{
   const host=$('slotRows');
   for(let i=0;i<4;i++){
@@ -647,9 +661,14 @@ $('saveCtrl').onclick=async()=>{
 };
 $('saveBeh').onclick=async()=>{
   try{
-    const j=await api('/api/settings',{recordOnArm:$('swRoa').checked,
-      stopOnDisarm:$('swSod').checked});
+    const body={recordOnArm:$('swRoa').checked,stopOnDisarm:$('swSod').checked};
+    const j=await api('/api/settings',body);
     toast(j.ok?'Behaviour saved':'Error: '+(j.error||'?'));
+    if(j.ok){
+      lastSyncedRoa=!!body.recordOnArm;lastSyncedSod=!!body.stopOnDisarm;
+      if(S){S.rec=S.rec||{};S.rec.roa=lastSyncedRoa;S.rec.sod=lastSyncedSod;}
+      poll();
+    }
   }catch(e){console.error('saveBeh error:',e);toast('Error: '+e.message);}
 };
 $('saveSlots').onclick=async()=>{
@@ -657,6 +676,13 @@ $('saveSlots').onclick=async()=>{
     const body={slot0:+$('sl0').value,slot1:+$('sl1').value,slot2:+$('sl2').value,slot3:+$('sl3').value};
     const j=await api('/api/settings',body);
     toast(j.ok?'OSD slots saved':'Error: '+(j.error||'?'));
+    if(j.ok){
+      // Adopt immediately so the next poll doesn't look like a revert,
+      // then pull authoritative state.
+      lastSyncedSlots=[body.slot0,body.slot1,body.slot2,body.slot3];
+      if(S)S.slots=[...lastSyncedSlots];
+      poll();
+    }
   }catch(e){console.error('saveSlots error:',e);toast('Error: '+e.message);}
 };
 
@@ -1145,10 +1171,15 @@ function render(){
   /* OSD previews */
   const osd=S.osd||['','','',''];
   const slots=S.slots||[0,0,0,0];
-  for(let i=0;i<4;i++){$('pv'+i).textContent=osd[i]||'\u2014';
+  for(let i=0;i<4;i++){$('pv'+i).textContent=osd[i]||'—';
     $('spv'+i).textContent='now: '+(osd[i]||'(blank)');
     const sel=$('sl'+i);
-    if(document.activeElement!==sel)sel.value=slots[i];}
+    // Don't clobber an unsaved user edit: only write the select when the
+    // server-confirmed value actually changed (or first sync after load).
+    if(document.activeElement!==sel&&lastSyncedSlots[i]!==slots[i]){
+      sel.value=slots[i];
+      lastSyncedSlots[i]=slots[i];
+    }}
 
   /* KPI cards */
   const b=c.batt;
@@ -1201,9 +1232,10 @@ async function poll(){
         $('lblThr').textContent=$('rngThr').value+' \u00b5s';}
       if(ae!==$('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));
         $('lblDeb').textContent=$('rngDeb').value+' ms';}
-      if(ae!==$('swRoa'))$('swRoa').checked=!!S.roa;
-      $('swSod').disabled=!S.roa;
-      $('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;
+      if(ae!==$('swRoa')&&lastSyncedRoa!==(!!rec.roa)){$('swRoa').checked=!!rec.roa;lastSyncedRoa=!!rec.roa;}
+      if(ae!==$('swSod')&&lastSyncedSod!==(!!rec.sod)){$('swSod').checked=!!rec.sod;lastSyncedSod=!!rec.sod;}
+      $('swSod').disabled=!$('swRoa').checked;
+      $('swSod').parentElement.parentElement.style.opacity=$('swRoa').checked?1:.55;
       if(ae!==$('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
       // brand pills reflect the live backend brand only when user has NOT
       // already picked a pending brand.
