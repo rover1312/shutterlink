@@ -1,9 +1,0 @@
-firmware_version=v2.1 (src/config.h:17)
-branch=cleanup
-commit=3467d73
-env=esp32c3 (esp32-c3-devkitm-1, arduino, min_spiffs.csv, NimBLE 1.4.1)
-ota_upload=POST http://192.168.4.1/api/ota (multipart field "firmware", .bin)
-ota_status=GET http://192.168.4.1/api/ota/status
-binary=ota-test/firmware.bin (NOT BUILT HERE — no toolchain in this session; run ota-test/build-ota.ps1 where pio exists)
-behavior=streaming upload (handleOtaUpload) + single final JSON (handleOtaResponse); Update.abort() on error; size cap = ESP.getFreeSketchSpace(); reboot only on Update.end(true)
-warning=OTA has no auth/signature on this build (see issue.md S03) — test on bench AP only, change default PSK first.
