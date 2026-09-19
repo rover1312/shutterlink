@@ -3,8 +3,11 @@
 // ============================================================================
 //
 // Two-tier design:
-//   • _discovered[]  — in-RAM only; populated by camRegistryRemember() during
-//     BLE scans. Used by the Web UI to show "Discovered cameras" (Card 3).
+//   • _discovered[]  — LEGACY in-RAM list (kept for compatibility). Prefer
+//     scan_results.* for new code: it has RSSI sorting, TTL eviction and a
+//     10-entry cap, while this table is an unordered newest-wins funnel.
+//     Populated by camRegistryRemember() during BLE scans. Used by the Web UI
+//     to show "Discovered cameras" (Card 3).
 //     NEVER auto-persisted to NVS. Cleared on reboot (intentional).
 //   • s.cams[]       — persisted to NVS. Only written when the user clicks
 //     "Pair & Save" on a discovered camera, which calls camRegistrySave().

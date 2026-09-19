@@ -48,6 +48,14 @@ void camStartUserScan();
 /// Disconnect current camera and stop any BLE operations (for UI disconnect).
 void camDisconnect();
 
+/// OTA radio-quiet mode: while true, backends must not start scans, attempt
+/// reconnects, or send keep-alives — the single 2.4GHz radio belongs to WiFi
+/// so the firmware upload doesn't stall (iPhone handshake timeouts show up
+/// as bogus "incorrect password"). Set by the OTA upload handler, cleared
+/// on END/ABORT/response. Query from dji/gopro update paths.
+void camSetOtaQuiet(bool quiet);
+bool camIsOtaQuiet();
+
 /// Sanitize device name to prevent XSS injection via BLE advertisements.
 /// Only allows alphanumeric, space, dash, underscore, dot. Replaces others with '?'.
 void sanitizeDeviceName(char* dest, const char* src, size_t maxSize);

@@ -28,6 +28,11 @@ static bool     _desired          = false;
 static int8_t   _pendingCmd       = 0;    // 1 = start pending retry, -1 = stop
 
 static bool     _lastArmed        = false;
+static bool     _armValid         = false;  // true after first valid arm sample
+static uint32_t _lastRetryMs      = 0;      // last deferred-command retry time
+
+// Retry at most once per second — the radio + camera need breathing room.
+static const uint32_t kRetryIntervalMs = 1000;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -66,7 +71,17 @@ static void clearRoaIntent() {
 
 void recorderInit() {
     _switchIsOn = false;
+    _switchRawIsOn = false;
+    _switchLastChange = 0;
+    _lastRcValue = 0;
     _rcDataValid = false;
+    _roaLatched = false;
+    _roaSuppress = false;
+    _desired = false;
+    _pendingCmd = 0;
+    _lastArmed = false;
+    _armValid = false;
+    _lastRetryMs = 0;
 }
 
 void recorderFeedRcValue(uint16_t rcValueUsec) {
@@ -99,12 +114,11 @@ void recorderUpdate() {
 
     // ── Arm-state edges ─────────────────────────────────────────────────
     const FcTelemetry &fc = fcGetTelemetry();
-    static bool armValid = false;
 
-    if (fc.fcAlive && (!armValid || fc.armed != _lastArmed)) {
+    if (fc.fcAlive && (!_armValid || fc.armed != _lastArmed)) {
         bool rising = fc.armed && !_lastArmed;
         _lastArmed = fc.armed;
-        armValid   = true;
+        _armValid   = true;
 
         DBG("FC: %s", fc.armed ? "ARMED" : "DISARMED");
 
@@ -130,11 +144,10 @@ void recorderUpdate() {
 
     // ── Retry a deferred command once the camera becomes ready ─────────
     // Camera commands are absolute (start/stop), never toggles, so a retry
-    // after reconnect is always safe.  Backed off to at most one retry per
+    // after reconnect is always safe. Backed off to at most one retry per
     // second.
-    static uint32_t lastRetry = 0;
-    if (_pendingCmd != 0 && camIsReady() && now - lastRetry >= 1000) {
-        lastRetry = now;
+    if (_pendingCmd != 0 && camIsReady() && now - _lastRetryMs >= kRetryIntervalMs) {
+        _lastRetryMs = now;
         if (_pendingCmd > 0) {
             sendStart();
         } else {

@@ -14,12 +14,13 @@
 static bool     _rcValid      = false;
 static bool     _rawOn        = false;    // Un-debounced switch position
 static bool     _stableOn     = true;     // Debounced position (boot default: on)
-static uint32_t _lastRawChange= 0;
+static uint32_t _lastRawChange = 0;      // 0 = no transition being qualified
 
-/// Minimum time a new raw position must hold before it is accepted.  Uses the
-/// configured debounce but never less than 600 ms — you don't want Wi-Fi
-/// flapping because of a bumpy thumb.
-#define WIFI_SWITCH_DEBOUNCE_MS 600
+// Minimum time a new raw position must hold before it is accepted. Uses a
+// fixed 600 ms floor — Wi-Fi must never flap because of a bumpy thumb.
+// (Deliberately independent from the record-switch debounce in settings:
+// toggling a radio costs far more than a record edge.)
+static const uint32_t kWifiSwitchDebounceMs = 600;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -32,9 +33,10 @@ void wifiSwitchInit() {
 
 void wifiSwitchFeedRc(uint16_t rcValueUsec) {
     _rcValid = true;
-    _rawOn = (rcValueUsec > settingsGet().rcThresholdUs);
-    if (_rawOn != _stableOn && _lastRawChange == 0) {
-        // Potential transition — start the qualification window.
+    bool rawOn = (rcValueUsec > settingsGet().rcThresholdUs);
+    if (rawOn != _rawOn) {
+        // Raw edge — restart the qualification window from now.
+        _rawOn = rawOn;
         _lastRawChange = millis();
     }
 }
@@ -54,7 +56,7 @@ void wifiSwitchUpdate() {
     }
 
     if (_lastRawChange != 0 &&
-        now - _lastRawChange >= WIFI_SWITCH_DEBOUNCE_MS) {
+        now - _lastRawChange >= kWifiSwitchDebounceMs) {
         _stableOn      = _rawOn;
         _lastRawChange = 0;
 

@@ -108,14 +108,15 @@ void mspSendSetText(uint8_t textType, const char *text);
 uint16_t mspGetRcChannel(const MspMessage &msg, uint8_t channelIndex);
 
 // Little-endian payload readers ------------------------------------------------
+// Bounds form is `offset + width > size` (fail-closed, returns 0).
 
 inline uint16_t mspReadU16(const MspMessage &msg, uint8_t offset) {
-    if (offset + 1 >= msg.payloadSize) return 0;
+    if (offset + 2 > msg.payloadSize) return 0;
     return (uint16_t)msg.payload[offset] | ((uint16_t)msg.payload[offset + 1] << 8);
 }
 
 inline uint32_t mspReadU32(const MspMessage &msg, uint8_t offset) {
-    if (offset + 3 >= msg.payloadSize) return 0;
+    if (offset + 4 > msg.payloadSize) return 0;
     return (uint32_t)msg.payload[offset] |
            ((uint32_t)msg.payload[offset + 1] << 8) |
            ((uint32_t)msg.payload[offset + 2] << 16) |

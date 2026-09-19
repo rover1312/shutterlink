@@ -135,6 +135,7 @@ input[type=range]::-moz-range-thumb{width:19px;height:19px;border-radius:50%;bac
 .btn:hover{transform:translateY(-2px);border-color:var(--hi)}
 .btn.primary{background:linear-gradient(135deg,var(--accent),#8a5cf6);border-color:transparent;color:#fff}
 .btn.danger{border-color:rgba(255,77,103,.45)}
+.btn.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);color:var(--txt)}
 .seg{display:flex;gap:8px}
 .seg button{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:15px;
   border:1px solid var(--stroke);background:var(--glass2);color:var(--dim);font-weight:700;font-size:13.5px;cursor:pointer;transition:var(--tr)}
@@ -363,7 +364,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
     <div class="field"><label>Network name (SSID)<span id="lblSsid"></span></label>
       <input type="text" id="inSsid" maxlength="32" placeholder="ShutterLink"></div>
     <div class="field"><label>Password (8–64 chars, empty = open)</label>
-      <input type="password" id="inPass" maxlength="64" placeholder="unchanged"></div>
+      <input type="password" id="inPass" maxlength="63" placeholder="8-63 chars, required"></div>
     <button class="btn primary" id="saveWifi">Save Wi-Fi &amp; restart AP</button>
     <div class="note">Saving restarts the access point — your phone will disconnect.
       Reconnect to the new network name to continue.</div>
@@ -387,8 +388,10 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;padding:18px 0 6px}
 <!-- =================== CARD 3: DISCOVER NEW CAMERA =================== -->
   <div class="glass card">
     <h2><svg class="ic"><use href="#i-refresh"/></svg>Discover new camera</h2>
-    <p style="font-size:13px;color:var(--dim);margin-bottom:14px">Press Scan to find nearby cameras. Type is auto-detected.</p>
+    <p style="font-size:13px;color:var(--dim);margin-bottom:14px">Pick the brand, then press Scan to find nearby cameras. Type is auto-detected.</p>
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn" id="selDji">DJI Osmo</button>
+      <button class="btn" id="selGp">GoPro</button>
       <button class="btn primary" id="scanBtn">
         <svg class="ic" style="vertical-align:middle" id="scanIcon"><use href="#i-refresh"/></svg>
         <span id="scanBtnTxt">Scan for Cameras</span>
@@ -526,6 +529,9 @@ if (typeof toast !== 'function') {
 const $=id=>document.getElementById(id);
 let S=null;
 let settingsLoaded=false;
+// Pending brand for the Discover card: -1 = none picked yet, 0 = DJI, 1 = GoPro.
+// MUST be declared before loadInitialSettings() runs (TDZ under 'use strict').
+let pendingBrand=-1;
 
 /* ---------- render helpers (must be before render() is called) ---------- */
 const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)',
@@ -533,6 +539,9 @@ const ST_COLORS={READY:'var(--ok)',CONNECTING:'var(--warn)',PAIRING:'var(--warn)
 function chLabel(i){return i<4?('CH'+(i+1)):('CH'+(i+1)+' AUX'+(i-3));}
 function mmss(s){s=Math.max(0,s|0);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
 
+// Last server-confirmed behaviour toggles. Same snap-back guard as slots:
+// poll must not clobber an unsaved checkbox edit.
+let lastSyncedRoa=null,lastSyncedSod=null;
 /* ---------- Load initial settings on page load ---------- */
 async function loadInitialSettings(){
   try{
@@ -545,9 +554,16 @@ async function loadInitialSettings(){
       if($('selCh'))$('selCh').value=(rec.auxCh!=null)?rec.auxCh:8;
       if($('rngThr')){$('rngThr').value=rec.thr||1500;fill($('rngThr'));$('lblThr').textContent=$('rngThr').value+' µs';}
       if($('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));$('lblDeb').textContent=$('rngDeb').value+' ms';}
-      if($('swRoa'))$('swRoa').checked=!!S.roa;
-      if($('swSod')){$('swSod').disabled=!S.roa;$('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;}
+      if($('swRoa'))$('swRoa').checked=!!rec.roa;
+      if($('swSod')){$('swSod').checked=!!rec.sod;$('swSod').disabled=!rec.roa;$('swSod').parentElement.parentElement.style.opacity=rec.roa?1:.55;}
+      lastSyncedRoa=!!rec.roa;lastSyncedSod=!!rec.sod;
       if($('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
+      // Local toggle: enabling RoA immediately enables Stop-on-disarm control
+      // (don't wait 1.5s for the next poll to unlock it).
+      if($('swRoa')&&!$('swRoa').onchange)$('swRoa').onchange=()=>{
+        const on=$('swRoa').checked;
+        if($('swSod')){$('swSod').disabled=!on;$('swSod').parentElement.parentElement.style.opacity=on?1:.55;}
+      };
       // Set brand pills based on loaded camera type
       pendingBrand=S.cam?S.cam.type:-1;
       if($('selDji'))$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
@@ -585,6 +601,10 @@ $('selWifiCh').onchange=async()=>{
 
 /* ---------- build OSD slot rows ---------- */
 const SLOT_NAMES=['Off','Cam status','Rec time','Battery','Link state','FC battery','Arm state'];
+// Last server-confirmed slot config. render() only writes sel.value when the
+// server value actually changed — otherwise a 1.5s poll would clobber the
+// user's unsaved edit (the "CM1 snaps back" bug) before Save is pressed.
+let lastSyncedSlots=[-1,-1,-1,-1];
 (()=>{
   const host=$('slotRows');
   for(let i=0;i<4;i++){
@@ -641,9 +661,14 @@ $('saveCtrl').onclick=async()=>{
 };
 $('saveBeh').onclick=async()=>{
   try{
-    const j=await api('/api/settings',{recordOnArm:$('swRoa').checked,
-      stopOnDisarm:$('swSod').checked});
+    const body={recordOnArm:$('swRoa').checked,stopOnDisarm:$('swSod').checked};
+    const j=await api('/api/settings',body);
     toast(j.ok?'Behaviour saved':'Error: '+(j.error||'?'));
+    if(j.ok){
+      lastSyncedRoa=!!body.recordOnArm;lastSyncedSod=!!body.stopOnDisarm;
+      if(S){S.rec=S.rec||{};S.rec.roa=lastSyncedRoa;S.rec.sod=lastSyncedSod;}
+      poll();
+    }
   }catch(e){console.error('saveBeh error:',e);toast('Error: '+e.message);}
 };
 $('saveSlots').onclick=async()=>{
@@ -651,11 +676,20 @@ $('saveSlots').onclick=async()=>{
     const body={slot0:+$('sl0').value,slot1:+$('sl1').value,slot2:+$('sl2').value,slot3:+$('sl3').value};
     const j=await api('/api/settings',body);
     toast(j.ok?'OSD slots saved':'Error: '+(j.error||'?'));
+    if(j.ok){
+      // Adopt immediately so the next poll doesn't look like a revert,
+      // then pull authoritative state.
+      lastSyncedSlots=[body.slot0,body.slot1,body.slot2,body.slot3];
+      if(S)S.slots=[...lastSyncedSlots];
+      poll();
+    }
   }catch(e){console.error('saveSlots error:',e);toast('Error: '+e.message);}
 };
 
 /* ---------- camera tab: 3 cards (active / saved / discover) ---------- */
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&','<':'<','>':'>','"':'"'}[c]));
+// Proper HTML escaping — the old map was an identity function ('<' -> '<').
+// Every innerHTML render path below depends on this for BLE-name safety.
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let lastErrorShown='';  // last backend lastError string already toasted
 
 function renderActiveCam(){
@@ -956,7 +990,9 @@ $('scanBtn').onclick=async()=>{
     // 1) If the picked brand differs from the active backend, set it
     //    first (no scan side-effect — this only changes settings.camera).
     const wantBrand = pendingBrand;
-    const curBrand  = (S&&S.cam)?S.cam.type:settingsGet()?0:0;
+    // NOTE: S.cam.type is the live backend; there is no JS settingsGet()
+    // (that name only exists in C++). Fall back to DJI (0) before first poll.
+    const curBrand  = (S&&S.cam&&S.cam.type!=null)?S.cam.type:0;
     if (curBrand !== wantBrand){
       const j = await api('/api/settings',{camera:wantBrand});
       if(!j.ok){toast('Error: '+(j.error||'?'));return;}
@@ -988,8 +1024,8 @@ $('saveWifi').onclick=async()=>{
   try{
     const ssid=$('inSsid').value.trim(),pass=$('inPass').value.trim();
     if(!ssid)return toast('Enter an SSID first');
-    if(pass&&pass.length<8)return toast('Password must be empty or 8+ chars');
-    const body={ssid:ssid};if(pass)body.pass=pass;
+    if(pass.length<8||pass.length>63)return toast('Password must be 8-63 chars (WPA2)');
+    const body={ssid:ssid,pass:pass};
     const j=await api('/api/settings',body);
     if(j.ok)toast('Wi-Fi saved \u2014 AP restarting, reconnect to "'+ssid+'"');
     else toast('Error: '+(j.error||'?'));
@@ -1135,10 +1171,15 @@ function render(){
   /* OSD previews */
   const osd=S.osd||['','','',''];
   const slots=S.slots||[0,0,0,0];
-  for(let i=0;i<4;i++){$('pv'+i).textContent=osd[i]||'\u2014';
+  for(let i=0;i<4;i++){$('pv'+i).textContent=osd[i]||'—';
     $('spv'+i).textContent='now: '+(osd[i]||'(blank)');
     const sel=$('sl'+i);
-    if(document.activeElement!==sel)sel.value=slots[i];}
+    // Don't clobber an unsaved user edit: only write the select when the
+    // server-confirmed value actually changed (or first sync after load).
+    if(document.activeElement!==sel&&lastSyncedSlots[i]!==slots[i]){
+      sel.value=slots[i];
+      lastSyncedSlots[i]=slots[i];
+    }}
 
   /* KPI cards */
   const b=c.batt;
@@ -1191,15 +1232,16 @@ async function poll(){
         $('lblThr').textContent=$('rngThr').value+' \u00b5s';}
       if(ae!==$('rngDeb')){$('rngDeb').value=rec.deb||300;fill($('rngDeb'));
         $('lblDeb').textContent=$('rngDeb').value+' ms';}
-      if(ae!==$('swRoa'))$('swRoa').checked=!!S.roa;
-      $('swSod').disabled=!S.roa;
-      $('swSod').parentElement.parentElement.style.opacity=S.roa?1:.55;
+      if(ae!==$('swRoa')&&lastSyncedRoa!==(!!rec.roa)){$('swRoa').checked=!!rec.roa;lastSyncedRoa=!!rec.roa;}
+      if(ae!==$('swSod')&&lastSyncedSod!==(!!rec.sod)){$('swSod').checked=!!rec.sod;lastSyncedSod=!!rec.sod;}
+      $('swSod').disabled=!$('swRoa').checked;
+      $('swSod').parentElement.parentElement.style.opacity=$('swRoa').checked?1:.55;
       if(ae!==$('selWifiCh'))$('selWifiCh').value=(S.wifiSwitch!=null&&S.wifiSwitch>=0)?S.wifiSwitch:255;
       // brand pills reflect the live backend brand only when user has NOT
       // already picked a pending brand.
       if(pendingBrand<0){
-        $('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
-        $('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
+        if($('selDji'))$('selDji').classList.toggle('on',!!S.cam&&S.cam.type===0);
+        if($('selGp'))$('selGp').classList.toggle('on',!!S.cam&&S.cam.type===1);
       }
       renderActiveCam();
       renderCams();

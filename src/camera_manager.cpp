@@ -13,16 +13,18 @@
 // ──────────────────────────────────────────────────────────────────────────────
 // Security & Concurrency Globals
 // ──────────────────────────────────────────────────────────────────────────────
+// NOTE: the firmware is single-threaded from loop()'s point of view — BLE
+// scan callbacks only ever write a tiny pending slot that loop() drains.
+// The two mutexes below are kept for the rare cross-task disconnect/scan
+// path, but they use short timeouts (never portMAX_DELAY) so a wedged BLE
+// host task can never deadlock loop().
+// ──────────────────────────────────────────────────────────────────────────────
 
 static SemaphoreHandle_t g_stateMutex = NULL;
 static SemaphoreHandle_t g_scanMutex = NULL;
 
-#define SAFE_STRNCPY(dest, src, size) do { \
-    if (size > 0) { \
-        strncpy((char*)(dest), (const char*)(src), (size) - 1); \
-        ((char*)(dest))[(size) - 1] = '\0'; \
-    } \
-} while(0)
+// Short lock timeout so loop() never blocks forever on the BLE host task.
+static const uint32_t kCamMutexTimeoutMs = 50;
 
 // Helper to safely sanitize device names (prevent XSS injection via BLE ads)
 void sanitizeDeviceName(char* dest, const char* src, size_t maxSize) {
@@ -62,6 +64,27 @@ static void initMutexes() {
 // ──────────────────────────────────────────────────────────────────────────────
 
 static bool _stackReady = false;
+
+// OTA radio-quiet: when true the shared 2.4GHz radio belongs to WiFi.
+// Backends check camIsOtaQuiet() before any scan/reconnect/keep-alive.
+static bool _otaQuiet = false;
+
+void camSetOtaQuiet(bool quiet) {
+    _otaQuiet = quiet;
+    if (quiet) {
+        // Stop any in-progress discovery scan immediately so beacons +
+        // the OTA TCP stream get full airtime. Existing BLE *connection*
+        // is kept (dropping it would lose the bond session); only new
+        // radio activity is suppressed — see dji/gopro update guards.
+        NimBLEScan *pScan = NimBLEDevice::getScan();
+        if (pScan && pScan->isScanning()) pScan->stop();
+        DBG("CAM: OTA quiet ON — BLE scan stopped, reconnect paused");
+    } else {
+        DBG("CAM: OTA quiet OFF — BLE activity resumed");
+    }
+}
+
+bool camIsOtaQuiet() { return _otaQuiet; }
 
 static void shutdownActiveBackend() {
     // Stop any scan and drop the current BLE connection before switching.
@@ -183,10 +206,10 @@ void camKick() {
 
 // Disconnect current camera and stop BLE operations (for UI disconnect)
 void camDisconnect() {
-    // Thread-safe shutdown
-    if (g_stateMutex != NULL) {
-        xSemaphoreTake(g_stateMutex, portMAX_DELAY);
-    }
+    // Short-timeout lock: never stall loop() on the BLE host task.
+    bool locked = (g_stateMutex != NULL &&
+                   xSemaphoreTake(g_stateMutex,
+                                  pdMS_TO_TICKS(kCamMutexTimeoutMs)) == pdTRUE);
     
     shutdownActiveBackend();
     
@@ -202,7 +225,7 @@ void camDisconnect() {
     
     DBG("CAM: disconnected active camera");
     
-    if (g_stateMutex != NULL) {
+    if (locked) {
         xSemaphoreGive(g_stateMutex);
     }
 }
@@ -214,10 +237,10 @@ void camDisconnect() {
 void camStartUserScan() {
     if (!_stackReady) return;
     
-    // Thread-safe scan start
-    if (g_scanMutex != NULL) {
-        xSemaphoreTake(g_scanMutex, portMAX_DELAY);
-    }
+    // Short-timeout lock: skip (don't queue) if the BLE task holds it.
+    bool locked = (g_scanMutex != NULL &&
+                   xSemaphoreTake(g_scanMutex,
+                                  pdMS_TO_TICKS(kCamMutexTimeoutMs)) == pdTRUE);
     
     CameraType t = settingsGet().camera;
     DBG("CAM: user-initiated scan (backend=%s)", cameraTypeName(t));
@@ -225,7 +248,7 @@ void camStartUserScan() {
     if (t == CAMERA_GOPRO) gpStartScan();
     else                    djiStartScan();
     
-    if (g_scanMutex != NULL) {
+    if (locked) {
         xSemaphoreGive(g_scanMutex);
     }
 }

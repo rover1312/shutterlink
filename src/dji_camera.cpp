@@ -9,6 +9,7 @@
 #include "cam_registry.h"
 #include "scan_results.h"
 #include "settings.h"
+#include "camera_manager.h"
 #include <NimBLEDevice.h>
 // ──────────────────────────────────────────────────────────────────────────────
 // DJI GATT UUIDs
@@ -42,6 +43,16 @@ static uint32_t _pairingArmedTime     = 0;
 static uint32_t _authStartMs          = 0;   // When pairing handshake began
 static uint32_t _lastRxMs             = 0;   // Last inbound DUML notification
 
+// Local record clock (mirrors GoPro backend): the Action 2 does not report
+// rec-time in a decoded field yet, so we count from our own accepted START.
+// Honest because commands are absolute start/stop with camera ACK.
+static uint32_t _recStartMs           = 0;
+static bool     _recActive            = false;
+// Last command direction, so an ACK (reply 0x00) confirms the right state.
+static bool     _lastCmdWasStart      = false;
+// Last unknown-telemetry hex (for battery decode captures, see below).
+static char     _lastTeleHex[96]      = "";
+
 // User-facing error from the last connect attempt. Surfaced through
 // /api/status → UI toast. Empty string = no error.
 static char _lastError[48] = "";
@@ -59,7 +70,7 @@ static bool    isDjiDevice(NimBLEAdvertisedDevice *device);
 static void    sendPairingArm();
 static void    sendSetPairingPIN();
 static void    sendKeepAlive();
-static size_t  buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver,
+static size_t  buildDumlPacket(uint8_t *buffer, size_t bufCap, uint8_t sender, uint8_t receiver,
                                uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
                                const uint8_t *payload, size_t payloadLen);
 static uint8_t  crc8_dji(const uint8_t *data, size_t len);
@@ -81,6 +92,8 @@ class ShutterLinkClientCallbacks : public NimBLEClientCallbacks {
         _pAuthChar      = nullptr;
         _telemetry.dataValid = false;
         _telemetry.state     = CAM_STATE_UNKNOWN;
+        _recActive = false;
+        _recStartMs = 0;
     }
 };
 static ShutterLinkClientCallbacks _clientCallbacks;
@@ -156,7 +169,10 @@ static ShutterLinkAdvertisedDeviceCallbacks _scanCallbacks;
 static const char *DJI_NAME_PREFIXES[] = {
     "Osmo Action", "DJI Action", "OSMO ACTION", "DJI ACTION",
     "Action 2", "action2", "Action 4", "Action 5", "OsmoAction",
-    "rishavhsAction2", "RishavhsAction2", "RISHAVHSACTION2",
+    // NOTE: personal device names (e.g. a developer's renamed camera) were
+    // removed here on purpose — matching must stay generic so one user's
+    // rename can't cause another user's mis-pair. Use scanAll mode to find
+    // renamed cameras by RSSI instead.
 };
 static const size_t DJI_NAME_PREFIX_COUNT = sizeof(DJI_NAME_PREFIXES) / sizeof(DJI_NAME_PREFIXES[0]);
 
@@ -244,6 +260,7 @@ static void scanCompleteCb(NimBLEScanResults results) {
 
 void djiStartScan() {
     if (_bleState == BLE_SCANNING) return;
+    if (camIsOtaQuiet()) return;  // OTA owns the radio — refuse new scans
     DBG("DJI: Starting 5s scan (40%% duty cycle)...");
     _bleState     = BLE_SCANNING;
     _doConnect    = false;
@@ -374,11 +391,14 @@ static uint16_t crc16_dji(const uint8_t *data, size_t len) {
     return crc;
 }
 
-static size_t buildDumlPacket(uint8_t *buffer, uint8_t sender, uint8_t receiver,
-                              uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
-                              const uint8_t *payload, size_t payloadLen) {
-    size_t idx = 0;
+static size_t buildDumlPacket(uint8_t *buffer, size_t bufCap, uint8_t sender, uint8_t receiver,
+                               uint16_t msgId, uint8_t flags, uint8_t cmdSet, uint8_t cmdId,
+                               const uint8_t *payload, size_t payloadLen) {
+    // V01: no backing for unchecked write (initial reverse-engineering oversight).
+    // DUML frames here are <= 13 + 32 = 45B; reject anything that won't fit.
     uint16_t totalLen = 13 + payloadLen;
+    if (totalLen > bufCap || totalLen > 64) return 0;
+    size_t idx = 0;
 
     buffer[idx++] = 0x55;
     buffer[idx++] = totalLen & 0xFF;
@@ -450,8 +470,9 @@ static void sendSetPairingPIN() {
     pIdx += strlen(pin);
 
     // Target: App (0x02) -> WiFi (0x07). Type: flags=0x40, set=0x07, id=0x45
-    size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++,
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x07, _sequenceCounter++,
                                  0x40, 0x07, 0x45, payload, pIdx);
+    if (!len) return;  // V01 guard: never send truncated packet
 
     // MUST use Write-Without-Response (false) on FFF5
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
@@ -464,8 +485,9 @@ static void sendKeepAlive() {
     // Send a generic ping to keep the link alive
     uint8_t packet[32];
     uint8_t payload[] = {0x00};
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x00, 0xF1, payload, 1);
+    if (!len) return;
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
     }
@@ -524,9 +546,9 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
         // Send ACK back: flags=0xC0, set=0x07, id=0x46, payload=0x00
         uint8_t packet[16];
         uint8_t payload[] = {0x00};
-        size_t len = buildDumlPacket(packet, 0x02, 0x07, _sequenceCounter++,
+        size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x07, _sequenceCounter++,
                                      0xC0, 0x07, 0x46, payload, 1);
-        if (_pControlChar && _pControlChar->canWriteNoResponse()) {
+        if (len && _pControlChar && _pControlChar->canWriteNoResponse()) {
             _pControlChar->writeValue(packet, len, false);
         }
     }
@@ -538,7 +560,18 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
     if (flags == 0xC0 && cmdSet == 0x02 && cmdId == 0x02 && length >= 12) {
         uint8_t reply = pData[11];
         switch (reply) {
-            case 0x00: DBG("DJI: record command OK"); break;
+            case 0x00:
+                DBG("DJI: record command OK");
+                // Confirm local state from our last command direction.
+                _telemetry.state = _lastCmdWasStart ? CAM_STATE_RECORDING : CAM_STATE_STANDBY;
+                _telemetry.dataValid = true;
+                if (_lastCmdWasStart && !_recActive) {
+                    _recActive = true;
+                    _recStartMs = millis();
+                } else if (!_lastCmdWasStart) {
+                    _recActive = false;
+                }
+                break;
             case 0xd8: DBG("DJI: record cmd: resource not ready"); break;
             case 0xd9: DBG("DJI: record cmd: wrong state (already rec?)"); break;
             case 0xdf: DBG("DJI: record cmd: wrong parameter"); break;
@@ -551,7 +584,21 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
     // Unsolicited Telemetry (flags=0x00)
     if (flags == 0x00) {
         _telemetry.dataValid = true;
-        // Basic parsing can be added here once we see the exact telemetry CmdSet/Id
+        // Battery decode: Action 2 DUML battery offset is NOT confirmed yet,
+        // so we deliberately do NOT guess (a wrong % is worse than "--").
+        // Capture helper: stash full hex of the latest telemetry frame for
+        // serial + future /api/status raw field. To decode your unit, leave
+        // USB logs on, note the camera's on-screen % at 2-3 levels, and send
+        // the matching `TELE` lines — the offset that tracks the screen is
+        // the battery byte.
+        {
+            size_t o = 0;
+            _lastTeleHex[0] = '\0';
+            for (size_t i = 0; i < length && i < 30 && o < sizeof(_lastTeleHex) - 4; i++) {
+                o += snprintf(_lastTeleHex + o, sizeof(_lastTeleHex) - o, "%02X ", pData[i]);
+            }
+            DBG("DJI: TELE set=0x%02X id=0x%02X len=%d %s", cmdSet, cmdId, length, _lastTeleHex);
+        }
     }
 }
 
@@ -559,9 +606,19 @@ static void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
 // Public API
 // ──────────────────────────────────────────────────────────────────────────────
 void djiInit() {
+    // H06-partial: reclaim a dead client on backend switch (disconnect-only
+    // leaked NimBLEClient; delete only when disconnected — never while in use).
+    if (_pClient && !_pClient->isConnected()) {
+        NimBLEDevice::deleteClient(_pClient);
+        _pClient = nullptr;
+        _pControlChar = _pTelemetryChar = _pAuthChar = nullptr;
+    }
     DBG("DJI: Backend ready (NimBLE stack shared)");
     _bleState = BLE_DISCONNECTED;
     _telemetry = CameraTelemetry();
+    _recActive = false;
+    _recStartMs = 0;
+    _lastTeleHex[0] = '\0';
 }
 
 void djiUpdate() {
@@ -569,6 +626,9 @@ void djiUpdate() {
 
     switch (_bleState) {
         case BLE_DISCONNECTED:
+            // OTA quiet: full radio to WiFi — defer direct-connect until clear.
+            // _doConnect stays set and runs on the first tick after resume.
+            if (camIsOtaQuiet()) break;
             // A pending direct-connect (Web UI "Use" / camKick) must be
             // honoured immediately — don't wait out the reconnect interval,
             // and never let startScan() clobber the request.
@@ -596,6 +656,7 @@ void djiUpdate() {
             break;
 
         case BLE_SCANNING:
+            if (camIsOtaQuiet()) break;  // let the stopped scan settle
             if (_doConnect) {
                 connectToCamera();
                 _doConnect = false;
@@ -635,7 +696,8 @@ void djiUpdate() {
             // constantly (~1 Hz GeneralStatus and up).  If nothing arrives
             // for a long while the link is wedged even if the BLE stack
             // hasn't noticed yet — force a reconnect.
-            if (now - _lastRxMs >= DJI_LINK_STALE_MS) {
+            // Paused during OTA quiet (keep-alives are intentionally held).
+            if (!camIsOtaQuiet() && now - _lastRxMs >= DJI_LINK_STALE_MS) {
                 DBG("DJI: No camera traffic for %d s — forcing reconnect",
                     DJI_LINK_STALE_MS / 1000);
                 _pClient->disconnect();
@@ -644,7 +706,18 @@ void djiUpdate() {
             }
             if (now - _lastKeepAlive >= BLE_KEEPALIVE_INTERVAL_MS) {
                 _lastKeepAlive = now;
-                sendKeepAlive();
+                // OTA quiet: skip keep-alive so the upload TCP stream is not
+                // preempted. Stale-watchdog is also paused below; the link
+                // resumes (or cleanly reconnects) after reboot/resume.
+                if (!camIsOtaQuiet()) sendKeepAlive();
+            }
+            // Local rec-time clock while our START is active (see header note:
+            // camera gives no decoded rec-time field, so count from accepted
+            // command like the GoPro backend does).
+            if (_recActive) {
+                _telemetry.recTimeSeconds = (now - _recStartMs) / 1000;
+                _telemetry.state = CAM_STATE_RECORDING;
+                _telemetry.dataValid = true;
             }
             break;
     }
@@ -659,12 +732,21 @@ bool djiSendStartRecord() {
     // Osmo Action family record control: CmdSet 0x02 (camera control),
     // CmdId 0x02 (record), payload 0x01 = start. Verified against the
     // Osmosis project's DUML captures (MEDIA_PROTOCOL.md §11/§12).
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
+    // V02: old comment said 0x0A/0x0D (drift, no backing) — corrected.
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x02, 0x02, payload, sizeof(payload));
+    if (!len) return false;
 
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
-        DBG("DJI: Sent Start Record (0x0A/0x0D) to FFF5");
+        DBG("DJI: Sent Start Record (0x02/0x02) to FFF5");
+        // Optimistic local state (confirmed by ACK in notifyCallback):
+        // without this the OSD/dashboard stay UNKNOWN until the ACK arrives.
+        _lastCmdWasStart = true;
+        _recActive = true;
+        _recStartMs = millis();
+        _telemetry.state = CAM_STATE_RECORDING;
+        _telemetry.dataValid = true;
         return true;
     }
     return false;
@@ -678,12 +760,17 @@ bool djiSendStopRecord() {
 
     // Osmo Action family record control: CmdSet 0x02, CmdId 0x02,
     // payload 0x00 = stop (see MEDIA_PROTOCOL.md §12).
-    size_t len = buildDumlPacket(packet, 0x02, 0x01, _sequenceCounter++,
+    size_t len = buildDumlPacket(packet, sizeof(packet), 0x02, 0x01, _sequenceCounter++,
                                  0x40, 0x02, 0x02, payload, sizeof(payload));
+    if (!len) return false;
 
     if (_pControlChar && _pControlChar->canWriteNoResponse()) {
         _pControlChar->writeValue(packet, len, false);
-        DBG("DJI: Sent Stop Record (0x0A/0x0D) to FFF5");
+        DBG("DJI: Sent Stop Record (0x02/0x02) to FFF5");
+        _lastCmdWasStart = false;
+        _recActive = false;
+        _telemetry.state = CAM_STATE_STANDBY;
+        _telemetry.dataValid = true;
         return true;
     }
     return false;

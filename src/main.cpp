@@ -38,6 +38,13 @@
 #include "web_server.h"
 #include "wifiswitch.h"
 #include "cam_registry.h"
+#include "scan_results.h"
+
+// Max UART bytes parsed per loop() iteration — bounds the MSP pump so a
+// chatty FC can never starve BLE / web / OSD in a single pass.
+static const uint8_t kMaxUartBytesPerLoop = 64;
+// Non-blocking wait for USB CDC at boot (replaces delay(1000)).
+static const uint32_t kUsbCdcWaitMs = 1000;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Internal State
@@ -117,10 +124,12 @@ static void mspPollRC() {
 }
 
 static void mspReadIncoming() {
-    MspMessage msg;
+    MspMessage msg{};  // E13: zero-init (no backing for uninit; fail-closed)
 
-    // Drain the UART buffer byte-by-byte into the MSP parser.
-    while (Serial1.available()) {
+    // Drain the UART buffer byte-by-byte into the MSP parser, but with a
+    // per-loop budget so a burst of FC traffic can't starve everything else.
+    uint8_t budget = kMaxUartBytesPerLoop;
+    while (budget-- > 0 && Serial1.available()) {
         uint8_t byte = Serial1.read();
 
         if (mspParseByte(byte, msg)) {
@@ -152,7 +161,14 @@ static void mspReadIncoming() {
 void setup() {
     // ── USB Serial for debug output ─────────────────────────────────────
     Serial.begin(115200);
-    delay(1000);  // Allow USB CDC to enumerate
+    // Non-blocking CDC wait: yield while the host enumerates, but never
+    // stall boot if USB is unplugged (field use = no USB at all).
+    {
+        uint32_t cdcStart = millis();
+        while (!Serial && (millis() - cdcStart) < kUsbCdcWaitMs) {
+            delay(10);
+        }
+    }
 
     DBG("============================================");
     DBG("  ESP32-C3 ShutterLink v2.0");
@@ -178,6 +194,8 @@ void setup() {
 
     // ── Recorder decision engine ────────────────────────────────────────
     recorderInit();
+    osdSlotsInit();
+    scanResultsInit();
 
     // ── Camera BLE backend (DJI or GoPro per settings) ──────────────────
     camInit();

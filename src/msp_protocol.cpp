@@ -183,7 +183,8 @@ void mspSendRequest(uint8_t cmdId) {
     frame[5] = 0 ^ cmdId;             // CRC = size ^ cmd (size is 0)
 
     _fcSerial->write(frame, 6);
-    _fcSerial->flush();  // Ensure the bytes are sent immediately
+    // No flush: UART FIFO drains async. flush() blocks loop() ~0.5ms per poll
+    // for no benefit (E08: original flush had no backing beyond caution).
     
     DBG("MSP: sent request CMD=%u", cmdId);
 }
@@ -194,6 +195,15 @@ void mspSendRequest(uint8_t cmdId) {
 
 void mspSendV2Command(uint16_t cmdId, const uint8_t *payload, uint16_t payloadLen) {
     if (!_fcSerial) return;
+
+    // Security/robustness: bound the payload to our stack buffer so a future
+    // caller can't overflow `buf` via memcpy. Today only mspSendSetText()
+    // calls this (max 18 bytes), but the guard makes the API safe by default.
+    if (payloadLen > MSP_MAX_PAYLOAD_SIZE) {
+        DBG("MSP: v2 payload %u exceeds max %u — dropped", payloadLen,
+            MSP_MAX_PAYLOAD_SIZE);
+        return;
+    }
 
     // CRC region = flag(1) + cmd(2) + size(2) + payload(payloadLen)
     uint16_t crcRegionLen = 5 + payloadLen;
@@ -220,7 +230,7 @@ void mspSendV2Command(uint16_t cmdId, const uint8_t *payload, uint16_t payloadLe
     buf[3 + crcRegionLen] = crc;
 
     _fcSerial->write(buf, 3 + crcRegionLen + 1);
-    _fcSerial->flush();
+    // No flush (see mspSendRequest E08).
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -250,7 +260,7 @@ void mspSendSetText(uint8_t textType, const char *text) {
 uint16_t mspGetRcChannel(const MspMessage &msg, uint8_t channelIndex) {
     // Each channel is 2 bytes (uint16 LE).  MSP_RC payload = N channels × 2.
     uint8_t offset = channelIndex * 2;
-    if (offset + 1 >= msg.payloadSize) {
+    if (offset + 2 > msg.payloadSize) {
         return 0;  // Channel index out of range for this response.
     }
     return (uint16_t)msg.payload[offset] | ((uint16_t)msg.payload[offset + 1] << 8);
